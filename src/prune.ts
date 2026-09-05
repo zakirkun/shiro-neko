@@ -98,6 +98,31 @@ const anyParts = (message: ModelMessage): Part[] =>
   Array.isArray(message.content) ? (message.content as Part[]) : [];
 
 /**
+ * Every part again with its provider `itemId` gone, so the history goes out inline
+ * rather than as `item_reference` entries pointing at provider-side storage.
+ *
+ * A reference only resolves while the provider still holds that item; once it does
+ * not, the request is rejected with 404 "Item with id '...' not found" and no retry
+ * of the same history can succeed. The content is already in the local history, so
+ * inlining loses nothing.
+ */
+export function detachProviderItems(messages: ModelMessage[]): ModelMessage[] {
+  return messages.map((message) => {
+    const parts = anyParts(message);
+    if (parts.length === 0) return message;
+
+    let changed = false;
+    const next = parts.map((part) => {
+      if (itemId(part) === undefined) return part;
+      changed = true;
+      return withoutItemId(part);
+    });
+
+    return changed ? ({ ...message, content: next } as ModelMessage) : message;
+  });
+}
+
+/**
  * Drops tool results whose tool call is gone.
  *
  * The OpenAI responses API rejects a `function_call_output` with no `function_call`
@@ -178,17 +203,21 @@ export type FitOptions = {
  * request that will be rejected for size.
  */
 export function pruneToFit({ messages, threshold, estimate }: FitOptions): ModelMessage[] {
-  const withoutReasoning = prunePreservingItems({ messages, reasoning: 'all', emptyMessages: 'remove' });
+  const withoutReasoning = detachProviderItems(
+    prunePreservingItems({ messages, reasoning: 'all', emptyMessages: 'remove' }),
+  );
   if (estimate(withoutReasoning) <= threshold) return withoutReasoning;
 
   let narrowest = withoutReasoning;
   for (const keep of KEEP_LADDER) {
-    narrowest = prunePreservingItems({
-      messages,
-      reasoning: 'all',
-      toolCalls: `before-last-${keep}-messages`,
-      emptyMessages: 'remove',
-    });
+    narrowest = detachProviderItems(
+      prunePreservingItems({
+        messages,
+        reasoning: 'all',
+        toolCalls: `before-last-${keep}-messages`,
+        emptyMessages: 'remove',
+      }),
+    );
     if (estimate(narrowest) <= threshold) return narrowest;
   }
   return narrowest;

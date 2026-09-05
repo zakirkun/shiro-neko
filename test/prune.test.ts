@@ -423,6 +423,21 @@ test('reasoning is always dropped, whatever the threshold', () => {
   expect(JSON.stringify(fitted)).not.toContain('deciding');
 });
 
+test('compaction removes a plain assistant item reference without inline reasoning', () => {
+  const messages: ModelMessage[] = [
+    { role: 'user', content: `question ${'x'.repeat(2000)}` },
+    {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'answer', providerOptions: { openai: { itemId: 'msg_plain' } } }],
+    },
+  ];
+
+  const fitted = pruneToFit({ messages, threshold: 1, estimate });
+
+  expect(itemIds(fitted)).toEqual([]);
+  expect(JSON.stringify(fitted)).toContain('answer');
+});
+
 test('the user prompt survives even the narrowest rung', () => {
   const messages = transcript(200, 4000);
   const fitted = pruneToFit({ messages, threshold: 100, estimate });
