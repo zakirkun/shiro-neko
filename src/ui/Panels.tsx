@@ -107,6 +107,31 @@ export function SubagentPanel({ agents, steps = 4 }: { agents: SubagentView[]; s
   );
 }
 
+/** Elapsed time in the shortest form that still reads as a duration. */
+const elapsed = (seconds: number) =>
+  seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+
+/** Seconds before the count appears: a timer starting at 0s is noise, not feedback. */
+const SLOW_AFTER = 10;
+
+/**
+ * The spinner line while the model works.
+ *
+ * The elapsed count starts only once a turn is slow enough to wonder about. Before
+ * that it is a number nobody reads; after it, it is the difference between "this is
+ * taking a while" and "has this hung?".
+ */
+export function Working({ seconds }: { seconds: number }) {
+  return (
+    <Text color="yellow">
+      <Spinner type="dots" />{' '}
+      <Text dimColor>
+        {seconds >= SLOW_AFTER ? `working ${elapsed(seconds)}... esc to interrupt` : 'working... esc to interrupt'}
+      </Text>
+    </Text>
+  );
+}
+
 /** Live tail of a running shell command. */
 export function OutputPanel({ text, lines = 8 }: { text: string; lines?: number }) {
   if (text.length === 0) return null;
@@ -259,7 +284,8 @@ export function StatusBar({
 }) {
   const pct = contextLimit ? Math.min(100, Math.round((contextTokens / contextLimit) * 100)) : undefined;
   // Amber from two thirds, red once compaction is imminent: the point is to warn
-  // before a turn silently loses its history, not after.
+  // before a turn silently loses its history, not after. Past 90 the colour is
+  // backed by words, because a reader watching the transcript is not watching this.
   const contextColor = pct === undefined ? undefined : pct >= 90 ? 'red' : pct >= 66 ? 'yellow' : undefined;
 
   return (
@@ -270,6 +296,7 @@ export function StatusBar({
       <Text color={contextColor} dimColor={contextColor === undefined}>
         {pct === undefined ? `~${contextTokens} ctx` : `${pct}% ctx`}
       </Text>
+      {pct !== undefined && pct >= 90 && <Text color="red">{' compacting soon'}</Text>}
       <Text dimColor>{`  ${cost}`}</Text>
     </Box>
   );
@@ -295,6 +322,7 @@ export function InfoPanel({ title, hint, lines }: { title: string; hint?: string
           </Box>
         ))
       )}
+      <Text dimColor>esc to dismiss</Text>
     </Box>
   );
 }
@@ -344,7 +372,7 @@ export function RegistryPanel({
           {r.installed && <Text color="green">{'  installed'}</Text>}
         </Box>
       ))}
-      <Text dimColor>{'S skill  P plugin  |  /registry add <name>'}</Text>
+      <Text dimColor>{'S skill  P plugin  |  /registry add <name>  |  esc to dismiss'}</Text>
     </Box>
   );
 }
