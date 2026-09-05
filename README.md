@@ -49,9 +49,9 @@ from the models that endpoint actually reports. Settings land in
 shiro-neko 0.1.0-beta.4  openai/gpt-5  session 0193ab2c
 agent: default  thinking: medium
 cwd: /home/you/project
-skills: commit, debug, refactor, review, test, verify
-plugins: guard, time
-approvals: ask for write_file, edit_file, multi_edit, apply_patch, bash, web_fetch, mcp__*
+skills: commit, debug, migrate, perf, refactor, review, security, test, verify
+plugins: guard, secrets, protect, time
+approvals: ask for write_file, edit_file, multi_edit, apply_patch, move_file, delete_file, bash, web_fetch, mcp__*
 /help for commands
 
 > why does the pagination test fail?
@@ -100,7 +100,8 @@ stops at the same approval prompt as yours. Progress streams to a panel.
 
 **Extensible from the prompt.** `/registry` browses external skills and plugins and installs
 them with one confirmation. A skill is shown in full before its text joins your system prompt;
-a plugin is a manifest of refusal rules, never code.
+a plugin is a manifest of refusal rules, never code. `/mcp add` walks you through a local or
+remote MCP server — kind, name, command or URL, headers — and writes it to your config.
 
 **Remembers between sessions.** Decisions, working commands, and traps go into per-project
 memory that is injected at the start of every future session.
@@ -112,7 +113,7 @@ record of what it already ran instead of repeating it.
 
 **Runs headless.** `shiro -p "review this diff" --json` for scripts and CI.
 
-**Keeps the tool list affordable.** Sixteen built-in tools, grouped into sets. Each costs
+**Keeps the tool list affordable.** Nineteen built-in tools, grouped into sets. Each costs
 about 550 characters of schema on every request, so `{ "toolSets": [] }` trims back to the six
 core ones and a disabled set reaches neither the wire nor the prompt.
 
@@ -144,7 +145,7 @@ Type `/` and a menu appears, narrowing as you type.
 
 ```
 /help  /agent [name]  /think [level]  /provider  /models  /model <id>
-/skills  /plugins  /registry [search|add|remove]  /init  /context
+/skills  /plugins  /registry [search|add|remove]  /mcp [add|remove]  /init  /context
 /todos  /notes  /memory  /tools  /compact  /cost
 /sessions  /resume <id>  /save  /clear  /exit
 ```

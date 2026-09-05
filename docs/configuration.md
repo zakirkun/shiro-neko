@@ -42,7 +42,7 @@ Written by `/provider`, editable by hand. Every field is optional.
 | `agent` | default variant: `default`, `quick`, `deep`, `plan`, `review` |
 | `thinking` | default level: `off`, `low`, `medium`, `high`, `max` |
 | `maxRetries` | retries per model call for transient failures. Default 3 |
-| `plugins` | which builtin plugins to enable. Omit for `["guard", "time"]` |
+| `plugins` | which builtin plugins to enable. Omit for `["guard", "secrets", "protect", "time"]` |
 | `toolSets` | optional tool sets beyond `core`: `edit-plus`, `git`, and `net`. Omit for the defaults; `net` is opt-in. See [tools](tools.md) |
 | `permission` | which calls run, ask, or are refused, matched per command or path. See [permissions](permissions.md) |
 | `registryUrl` | index for `/registry`. Omit for the default. See [registry](registry.md) |

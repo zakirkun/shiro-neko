@@ -3,8 +3,8 @@
 A skill is a markdown file with instructions for one kind of task. Only its name and
 description sit in the system prompt; the body is loaded on demand.
 
-That split matters. The six bundled skills are 8,900 characters of body against roughly 1,000
-characters of catalogue — paid on every request. Putting every body in the prompt
+That split matters. The nine bundled skills are roughly 14,000 characters of body against about
+1,500 characters of catalogue — paid on every request. Putting every body in the prompt
 would cost that on every turn, for instructions relevant to one turn in twenty.
 
 ## Format
@@ -76,6 +76,17 @@ what was not verified.
 **`commit`** — stage and commit work: look at the diff before staging, one commit one reason,
 match the repository's message style, and the refusals — no amending pushed commits, no
 `--no-verify`, no push unless asked.
+
+**`security`** — find the trust boundary, then work outward: injection, missing authorisation,
+path traversal, secrets in the wrong place, SSRF, hand-rolled crypto. Do not report a finding
+without a path from an attacker-controlled value to the sink.
+
+**`perf`** — measure before changing anything, find where the time actually goes, change one
+thing at a time, and stop at a target stated up front. Report the baseline alongside the win.
+
+**`migrate`** — read the changelog first, find every call site before changing one (including
+CI, Dockerfiles, and docs), apply one shape of change rather than improving as you pass, and
+never hand-merge a lockfile.
 
 They are string constants in `src/skills-builtin.ts` rather than files, because
 `bun build --compile` only embeds modules reachable through imports. A directory of `.md`

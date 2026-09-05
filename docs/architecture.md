@@ -212,6 +212,18 @@ an assistant `tool-call` and the `tool` message answering it. What reaches the w
 reverse pairing is deliberately left alone: a call still awaiting its result is exactly what a
 suspended approval looks like, and dropping it would break resume.
 
+**An item the provider no longer holds.** A reference resolves only while the item is still in
+provider storage, which a resumed session or an endpoint fallback cannot count on:
+
+```
+404 Item with id 'msg_…' not found.
+```
+
+Nothing about the same history can succeed on retry, so `pruneToFit` strips every provider
+`itemId` from what it sends, and `Session.run` answers that 404 by rewriting its own history
+inline and running the request again — once per turn, and only when the rejection arrived before
+any output, since delivered text cannot be unsent.
+
 The pruning ladder drops reasoning first and then keeps the widest recent tool tail that fits.
 The SDK carries that returned message view into later steps, and the session reports compaction
 once per turn rather than once per step.
@@ -234,6 +246,7 @@ the reasoning.
 | `session.ts` | the loop, approvals, compaction, event stream |
 | `tools.ts` | file and shell tools, tool sets, ripgrep bridge, bash streaming and interrupt |
 | `tools-git.ts` | read-only git tools, spawned with a fixed argv |
+| `commit.ts` | `git_commit_message`, a nested model call over the staged diff |
 | `tools-net.ts` | `web_fetch`, private-address and redirect checks |
 | `ignore.ts` | gitignore-aware walker, path jail |
 | `complete.ts` | `@path` token extraction, ranking, insertion |
@@ -251,20 +264,28 @@ the reasoning.
 | `prune.ts` | provider-item and tool-pairing repair |
 | `markdown.ts` | parser, no dependency |
 | `store.ts` | sessions, prompt history |
+| `farewell.ts` | the exit message and its resume commands |
 | `config.ts` | resolution, model construction |
 | `providers.ts` | presets, `/models` fetch |
 | `pricing.ts` | USD rates |
 | `commands.ts` | slash registry, parsing, menu matching |
 | `headless.ts` | `-p` mode |
 | `cli.tsx` | argv, wiring, lifecycle |
-| `ui/*` | Ink components |
+| `ui/App.tsx` | state, the turn loop, slash-command routing |
+| `ui/transcript.ts` | line types, tool argument and result formatting |
+| `ui/buses.ts` | notice and subagent channels, subagent view folding |
+| `ui/Approval.tsx` | the approval bridge and its prompt |
+| `ui/Pickers.tsx` | command menu, shared list picker, install confirm |
+| `ui/panel-bodies.ts` | `/tools`, `/cost`, `/context`, `/todos` bodies |
+| `ui/Panels.tsx` | presentational panels and the status bar |
+| `ui/*` | remaining Ink components |
 
 Every module is pure of the UI except `ui/`, and `ui/` never touches the SDK. The seam is the
 `AgentEvent` stream.
 
 ## Testing
 
-538 tests became 647 as the suites grew; no mocking framework. `MockLanguageModelV4` from
+538 tests became 713 as the suites grew; no mocking framework. `MockLanguageModelV4` from
 `ai/test` drives the loop; `ink-testing-library` drives the UI with real keystrokes; MCP is
 tested against a real stdio server subprocess; provider wire formats and the registry are
 tested against a local HTTP server; the interrupt path spawns a real subprocess and asserts it

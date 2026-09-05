@@ -1,9 +1,95 @@
 # MCP
 
+Model Context Protocol servers contribute tools to the agent. Two transports: a local
+command over stdio, and a remote http or sse endpoint.
+
+## Adding one from the prompt
+
+```
+/mcp              list what is configured, with the tool count each contributed
+/mcp add          wizard: local or remote, then the fields that kind needs
+/mcp remove <name>
+```
+
+`/mcp add` asks for the kind first, because the two need different fields — a command and
+its arguments against a URL and its headers — and a single form with half of it inapplicable
+is worse than two short ones.
+
+```
+Add an MCP server
+none configured yet
+> local    a command on this machine, over stdio
+  remote   an http or sse endpoint
+```
+
+The name is validated as it is typed. Tools register as `mcp__<server>__<tool>`, so a name
+with a space or a double underscore produces a tool the model cannot address and two servers
+whose namespaces can collide — both are refused in place rather than at connect time. A name
+already in the config is refused too.
+
+For a local server the wizard then asks for the command and its arguments; arguments split on
+spaces and keep quoted runs together, so `--root "/home/my folder"` arrives as one argument.
+For a remote one it asks for the URL — http or https only — and optional headers as
+`KEY: value, OTHER: value`.
+
+Both write straight to `config.json` and merge with whatever is already there. **A new server
+connects on the next start**, not mid-session: connecting during a turn would change the tool
+list under a request that is already running.
+
+`/mcp` shows the state of each configured server, which is what makes a typo visible:
+
+```
+mcp servers
+/mcp add to add one
+
+- `filesystem` (local) - 11 tools
+  npx -y @modelcontextprotocol/server-filesystem .
+- `api` (remote) - failed: fetch failed
+  https://example.com/mcp
+
+configured in /home/you/.shiro-neko/config.json
+```
+
+## The config file
+
+The wizard writes this; it is equally editable by hand.
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+    },
+    "api": {
+      "url": "https://example.com/mcp",
+      "headers": { "Authorization": "Bearer sk-..." }
+    }
+  }
+}
+```
+
+| Field | Kind | Meaning |
+|---|---|---|
+| `command` | local | the executable to spawn |
+| `args` | local | its arguments |
+| `env` | local | extra environment variables |
+| `cwd` | local | working directory |
+| `url` | remote | the MCP endpoint |
+| `type` | remote | `http` (default) or `sse` |
+| `headers` | remote | sent with every request, for auth |
+
+`--no-mcp` skips every server for one run, which is the first thing to try when the agent is
+behaving oddly and a server is in play.
+
 [Model Context Protocol](https://modelcontextprotocol.io) servers contribute tools. Configure
 them in `~/.shiro-neko/config.json` and they appear alongside the builtins.
 
 ## Configuration
+
+Everything the wizard writes is equally editable by hand, and a hand-written entry that
+`/mcp add` would have rejected still connects — the validation is on the input path, not a
+schema check at load.
 
 ```json
 {

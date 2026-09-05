@@ -16,7 +16,7 @@ faster and the fallback path is exercised without it.
 ```bash
 bun run shiro          # run from source
 bun run typecheck      # tsc --noEmit
-bun test               # 647 tests
+bun test               # 713 tests
 bun run build          # single binary for this platform -> dist/shiro
 bun run release        # all five platforms -> dist/release + SHA256SUMS
 bun run install:local  # build, then copy onto PATH
@@ -71,6 +71,9 @@ mock-verification test:
   request body
 - `pruneMessages` leaving a tool result without its tool call — same, and it took a stub
   endpoint that rejected the pairing to prove the fix
+- A provider item the server had dropped — visible only as a 404 from a stub endpoint that
+  refused any `item_reference`, and only fixable by comparing the two request bodies the
+  session sent
 - Compaction blanking the model's memory of its own tool calls — invisible in any single
   request, and visible only as "the loop ran to its step limit". Caught by asserting the loop
   terminated because the model chose to, not that the messages had a particular shape
@@ -95,7 +98,7 @@ Steps 3 and 4 are two hand-maintained lists of tool names, which is a known weak
 added to one and forgotten in the other is a silently ungated write. Deriving both from the
 tool definitions is on [TODO.md](../TODO.md).
 
-Every tool costs roughly 550 characters of schema on every request. Sixteen built-in tools is
+Every tool costs roughly 550 characters of schema on every request. Nineteen built-in tools is
 past where selection accuracy starts to matter, which is why sets exist and why a new tool
 needs to earn its place — see [ROADMAP.md](../ROADMAP.md) for what has been declined and why.
 One set, `net`, is opt-in rather than on: `web_fetch` is the one tool that leaves the machine.

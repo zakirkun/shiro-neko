@@ -125,6 +125,21 @@ shiro -c                  # newest session for this directory
 shiro -r 0193ab2c         # by id or unique prefix
 ```
 
+Both are printed as shiro exits, so the id is on screen rather than in a directory you
+have to go looking through:
+
+```
+Good bye.
+Saved 8 messages: "why does the pagination test fail?"
+
+Resume it with:
+  shiro -c                    newest session in this directory
+  shiro -r 0193ab2c           this session by id
+```
+
+A session with no messages was never written, so it says so instead of naming a command
+that would find nothing.
+
 ```
 /sessions   list the last 15
 /resume <id>
@@ -207,6 +222,26 @@ answering it:
 `dropOrphanedResults` drops any result whose call id no longer survives. The reverse is left
 alone deliberately: a tool call still waiting for its result is what a suspended approval looks
 like, and dropping it would break `/resume`.
+
+**An item the provider no longer holds.** An `item_reference` only resolves while the item is
+still in provider storage. A session resumed the next day, or one that fell back from
+`/v1/chat/completions` to `/v1/responses` mid-turn, can carry references to items that are gone:
+
+```
+404 Item with id 'msg_…' not found.
+```
+
+Retrying that history fails identically every time, so there is nothing to wait for. Two things
+answer it. Compaction now strips every provider `itemId` from the history it sends, so a pruned
+turn is always inline; and a 404 naming a missing item rewrites the session's own history inline
+and runs the request again — once per turn, reported as:
+
+```
+the provider no longer had part of this session stored. Re-sent the history inline and carried on.
+```
+
+Only a rejection *before* any output is repaired. Once text is on screen it cannot be unsent, and
+a retry would say it all a second time.
 
 ### What compaction still does not do
 
