@@ -30,6 +30,12 @@ export function testHooks(over: Partial<AppHooks> = {}): AppHooks {
       install: async () => 'installed',
       remove: async () => 'removed',
     },
+    mcp: {
+      names: () => [],
+      list: () => 'no mcp servers configured',
+      add: async (result) => `added ${result.name}`,
+      remove: async (name) => `removed ${name}`,
+    },
     initPrompt: 'write AGENTS.md',
     history: [],
     recordPrompt: () => {},

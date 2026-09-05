@@ -17,6 +17,7 @@ export type CommandAction =
   | { type: 'skills' }
   | { type: 'plugins' }
   | { type: 'registry'; action: 'list' | 'search' | 'add' | 'remove' | 'installed'; arg?: string }
+  | { type: 'mcp'; action: 'list' | 'add' | 'remove'; arg?: string }
   | { type: 'memory' }
   | { type: 'agent'; agent?: string }
   | { type: 'think'; level?: string }
@@ -44,6 +45,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: 'skills', summary: 'list loaded skills' },
   { name: 'plugins', summary: 'list active plugins' },
   { name: 'registry', arg: '[search|add|remove] [name]', summary: 'browse and install external skills and plugins' },
+  { name: 'mcp', arg: '[add|remove <name>]', summary: 'add a local or remote MCP server, or list them' },
   { name: 'init', summary: 'have the agent write AGENTS.md for this project' },
   { name: 'context', summary: 'show which instruction files are loaded' },
   { name: 'todos', summary: "show the agent's task list" },
@@ -127,6 +129,33 @@ function parseRegistry(arg: string): CommandAction {
   }
 }
 
+/**
+ * `/mcp [list|add|remove <name>]`.
+ *
+ * A bare `/mcp` lists what is configured, because that is the question asked most
+ * often. `add` opens the wizard rather than taking arguments: a server is a name
+ * plus a command or a URL plus optional headers, and a single argument string
+ * cannot express that without a syntax nobody remembers.
+ */
+function parseMcp(arg: string): CommandAction {
+  const [verb = '', ...rest] = arg.split(/\s+/).filter(Boolean);
+  const name = rest.join(' ').trim();
+
+  switch (verb) {
+    case '':
+    case 'list':
+      return { type: 'mcp', action: 'list' };
+    case 'add':
+    case 'new':
+      return { type: 'mcp', action: 'add' };
+    case 'remove':
+    case 'rm':
+      return name ? { type: 'mcp', action: 'remove', arg: name } : { type: 'info', text: 'usage: /mcp remove <name>' };
+    default:
+      return { type: 'info', text: 'usage: /mcp [list|add|remove <name>]' };
+  }
+}
+
 /** Pure parser: no IO, so the TUI and headless mode share one definition. */
 export function parseCommand(raw: string): CommandAction {
   const input = raw.trim();
@@ -174,6 +203,8 @@ export function parseCommand(raw: string): CommandAction {
       return { type: 'plugins' };
     case 'registry':
       return parseRegistry(arg);
+    case 'mcp':
+      return parseMcp(arg);
     case 'memory':
       return { type: 'memory' };
     case 'agent':
