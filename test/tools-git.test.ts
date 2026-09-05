@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import {
   GIT_TOOL_NAMES,
   gitBlameTool,
+  gitBranchTool,
   gitDiffTool,
   gitLogTool,
   gitShowTool,
@@ -45,8 +46,34 @@ async function repoWithOneCommit(): Promise<void> {
 }
 
 test('every git tool is registered and named consistently', () => {
-  expect(GIT_TOOL_NAMES.sort()).toEqual(['git_blame', 'git_diff', 'git_log', 'git_show', 'git_status']);
-  expect(Object.keys(gitTools).sort()).toEqual(GIT_TOOL_NAMES.sort());
+  // git_commit_message is built in src/commit.ts with the model at construction,
+  // so it is not part of the static gitTools object — but it belongs to the set.
+  expect(GIT_TOOL_NAMES.sort()).toEqual([
+    'git_blame',
+    'git_branch',
+    'git_commit_message',
+    'git_diff',
+    'git_log',
+    'git_show',
+    'git_status',
+  ]);
+  expect([...Object.keys(gitTools), 'git_commit_message'].sort()).toEqual(GIT_TOOL_NAMES.sort());
+});
+
+test('git_branch marks the current branch and lists the others', async () => {
+  await repoWithOneCommit();
+  const one = await run(gitBranchTool, {});
+  expect(one).toContain('* main');
+
+  await git('branch', 'feature/pagination');
+  const two = await run(gitBranchTool, {});
+  expect(two).toContain('* main');
+  expect(two).toContain('feature/pagination');
+  expect(two).toContain('add the server port');
+});
+
+test('git_branch outside a repository says so', async () => {
+  expect(run(gitBranchTool, {})).rejects.toThrow(/not a git repository/);
 });
 
 test('git_status names the branch and describes each change', async () => {

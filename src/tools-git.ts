@@ -16,7 +16,7 @@ type GitResult = { ok: true; stdout: string } | { ok: false; message: string };
  * an injection. Spawning the binary directly with a fixed argv removes that entirely,
  * which is also why these tools can be auto-approved.
  */
-async function git(args: string[], cwd: string, timeout = 30_000): Promise<GitResult> {
+export async function git(args: string[], cwd: string, timeout = 30_000): Promise<GitResult> {
   let proc: Bun.Subprocess<'ignore', 'pipe', 'pipe'>;
   try {
     proc = Bun.spawn(['git', ...args], { cwd, stdout: 'pipe', stderr: 'pipe', timeout });
@@ -152,13 +152,38 @@ export const gitBlameTool = tool({
   },
 });
 
+export const gitBranchTool = tool({
+  description:
+    'Branches in this repository, newest commit first, with the current one marked. Pass remote to include ' +
+    'remote-tracking branches. Use it before proposing a branch name, so a name already taken is obvious.',
+  inputSchema: z.object({
+    remote: z.boolean().optional().describe('Include remote-tracking branches'),
+  }),
+  execute: async ({ remote }) => {
+    const args = [
+      'branch',
+      '--list',
+      '--sort=-committerdate',
+      '--format=%(if)%(HEAD)%(then)* %(else)  %(end)%(refname:short)  %(committerdate:short)  %(contents:subject)',
+    ];
+    if (remote) args.push('--all');
+    return run(args, 'No branches yet.');
+  },
+});
+
 export const gitTools = {
   git_status: gitStatusTool,
   git_diff: gitDiffTool,
   git_log: gitLogTool,
   git_show: gitShowTool,
   git_blame: gitBlameTool,
+  git_branch: gitBranchTool,
 };
 
-/** Read-only, so none of these ever prompt for approval. */
-export const GIT_TOOL_NAMES = Object.keys(gitTools);
+/**
+ * Read-only, so none of these ever prompt for approval.
+ *
+ * `git_commit_message` is built in `src/commit.ts` and wired in `cli.tsx`, because it
+ * needs the model at construction. It belongs to this set for gating like the rest.
+ */
+export const GIT_TOOL_NAMES = [...Object.keys(gitTools), 'git_commit_message'];
