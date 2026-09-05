@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test';
 import type { LanguageModelV4CallOptions, LanguageModelV4StreamPart } from '@ai-sdk/provider';
-import type { ModelMessage } from 'ai';
+import { APICallError, type ModelMessage } from 'ai';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -326,3 +326,130 @@ test('a compacted turn sends no assistant item reference whose reasoning was pru
       }
     }
   }), 20_000);
+
+test('a compacted turn inlines a plain assistant item instead of referencing remote storage', async () => {
+  const seen: LanguageModelV4CallOptions[] = [];
+  const session = new Session({
+    messages: [
+      { role: 'user', content: `earlier question ${'x'.repeat(4000)}` },
+      {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'remembered answer', providerOptions: { openai: { itemId: 'msg_stale' } } }],
+      },
+    ],
+    compactThreshold: 100,
+    model: new MockLanguageModelV4({
+      doStream: async (o) => {
+        seen.push(o);
+        return stream(text('ok'));
+      },
+    }),
+    askApproval: async () => 'deny',
+  });
+
+  const events: AgentEvent[] = [];
+  for await (const event of session.send('continue')) events.push(event);
+
+  expect(events.some((event) => event.type === 'compacted')).toBe(true);
+  expect(JSON.stringify(seen[0]?.prompt)).not.toContain('msg_stale');
+  expect(JSON.stringify(seen[0]?.prompt)).toContain('remembered answer');
+});
+
+/**
+ * The failure this guards against: an item reference the provider no longer holds is
+ * rejected with 404 "Item with id 'msg_...' not found", and every retry of the same
+ * history is rejected the same way, so resuming a session could never get going.
+ */
+const staleItem = (id: string) =>
+  new APICallError({
+    message: `Item with id '${id}' not found.`,
+    url: 'https://api.openai.com/v1/responses',
+    requestBodyValues: {},
+    statusCode: 404,
+    isRetryable: false,
+  });
+
+const withStoredItem = (): ModelMessage[] => [
+  { role: 'user', content: 'earlier question' },
+  {
+    role: 'assistant',
+    content: [{ type: 'text', text: 'remembered answer', providerOptions: { openai: { itemId: 'msg_gone' } } }],
+  },
+];
+
+test('a rejected stale item reference is retried inline rather than ending the turn', async () => {
+  const seen: LanguageModelV4CallOptions[] = [];
+  let call = 0;
+  const session = new Session({
+    messages: withStoredItem(),
+    model: new MockLanguageModelV4({
+      doStream: async (o) => {
+        seen.push(o);
+        if (call++ === 0) throw staleItem('msg_gone');
+        return stream(text('picked up where we left off'));
+      },
+    }),
+    askApproval: async () => 'deny',
+    maxRetries: 0,
+  });
+
+  const events: AgentEvent[] = [];
+  for await (const event of session.send('continue')) events.push(event);
+
+  expect(events.map((e) => e.type)).toEqual(['notice', 'text', 'done']);
+  expect(call).toBe(2);
+  expect(JSON.stringify(seen[0]?.prompt)).toContain('msg_gone');
+  // The retry carries the same content with nothing pointing at provider storage.
+  expect(JSON.stringify(seen[1]?.prompt)).not.toContain('msg_gone');
+  expect(JSON.stringify(seen[1]?.prompt)).toContain('remembered answer');
+  // Repaired in place, so a save or a later turn cannot resend the dead reference.
+  expect(JSON.stringify(session.messages)).not.toContain('msg_gone');
+});
+
+test('a stale item rejection that survives the repair is reported once, not looped', async () => {
+  let call = 0;
+  const session = new Session({
+    messages: withStoredItem(),
+    model: new MockLanguageModelV4({
+      doStream: async () => {
+        call++;
+        throw staleItem('msg_gone');
+      },
+    }),
+    askApproval: async () => 'deny',
+    maxRetries: 0,
+  });
+
+  const events: AgentEvent[] = [];
+  for await (const event of session.send('continue')) events.push(event);
+
+  expect(events.map((e) => e.type)).toEqual(['notice', 'error']);
+  expect(call).toBe(2);
+});
+
+test('a stale item arriving after text was streamed is reported, not silently repeated', async () => {
+  let call = 0;
+  const session = new Session({
+    messages: withStoredItem(),
+    model: new MockLanguageModelV4({
+      doStream: async () => {
+        call++;
+        return stream([
+          { type: 'text-start', id: '0' },
+          { type: 'text-delta', id: '0', delta: 'half an answer' },
+          { type: 'error', error: staleItem('msg_gone') },
+        ]);
+      },
+    }),
+    askApproval: async () => 'deny',
+    maxRetries: 0,
+  });
+
+  const events: AgentEvent[] = [];
+  for await (const event of session.send('continue')) events.push(event);
+
+  // Retrying here would deliver "half an answer" twice.
+  expect(events.map((e) => e.type)).toEqual(['text', 'error']);
+  expect(call).toBe(1);
+});
+

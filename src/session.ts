@@ -2,6 +2,7 @@ import {
   isStepCount,
   generateText,
   streamText,
+  APICallError,
   type LanguageModel,
   type ModelMessage,
   type ToolApprovalResponse,
@@ -15,7 +16,7 @@ import { Notebook, type NotebookState } from './notebook';
 import { Permissions, type PermissionConfig } from './permission';
 import type { PluginHost } from './plugins';
 import { systemPrompt } from './prompt';
-import { pruneToFit } from './prune';
+import { detachProviderItems, pruneToFit } from './prune';
 import { createSkillTool, renderSkills, type Skill } from './skills';
 import { disabledToolNames, onBashOutput, tools as builtinTools, type ToolSetName } from './tools';
 
@@ -96,6 +97,17 @@ const REPEAT_LIMIT = 3;
 
 const callKey = (toolName: string, input: unknown) => `${toolName}:${JSON.stringify(input ?? null)}`;
 
+/**
+ * The provider rejected an `item_reference` because it no longer holds that item:
+ * 404 "Item with id 'msg_...' not found". Retrying the same history repeats it, so
+ * this is the one failure that is worth answering by rewriting the history.
+ */
+const isStaleItemError = (error: unknown): boolean =>
+  APICallError.isInstance(error) && /item with id '[^']*' not found/i.test(error.message);
+
+const STALE_ITEM_NOTICE =
+  'The provider no longer had part of this session stored. Re-sent the history inline and carried on.';
+
 type ApprovalContext = Pick<ApprovalRequest, 'matchedPattern' | 'suggestedPattern' | 'repeated'>;
 
 export class Session {
@@ -109,6 +121,8 @@ export class Session {
   private readonly permissions: Permissions;
   /** Calls seen this turn, for the repeat guard. Cleared per turn, not per step. */
   private readonly seen = new Map<string, number>();
+  /** One stale-item repair per turn, so a repeating 404 cannot loop the run. */
+  private staleItemsRepaired = false;
   private controller: AbortController | undefined;
 
   constructor(private readonly opts: SessionOptions) {
@@ -331,6 +345,7 @@ export class Session {
     // Per turn, not per step: a tool called once in each of three steps is the
     // loop this guards against.
     this.seen.clear();
+    this.staleItemsRepaired = false;
 
     const outputs: Extract<AgentEvent, { type: 'tool-output' }>[] = [];
     onBashOutput(({ toolCallId, chunk }) => {
@@ -344,6 +359,19 @@ export class Session {
       onBashOutput(undefined);
       await this.opts.plugins?.afterTurn();
     }
+  }
+
+  /**
+   * Rewrites the history so nothing points at provider-side storage, once per turn.
+   *
+   * The 404 repeats for every reference in the request, and a repair that could run
+   * twice would retry a request that cannot be made to work.
+   */
+  private repairStaleItems(): boolean {
+    if (this.staleItemsRepaired) return false;
+    this.staleItemsRepaired = true;
+    this.replace(detachProviderItems(this.messages));
+    return true;
   }
 
   private async *run(
@@ -360,6 +388,8 @@ export class Session {
       const guardNotices: string[] = [];
       const why = new Map<string, ApprovalContext>();
       let sawError = false;
+      let delivered = false;
+      let staleRetry = false;
 
       const result = streamText({
         model: this.model,
@@ -405,14 +435,17 @@ export class Session {
           while (guardNotices.length > 0) yield { type: 'notice', text: guardNotices.shift()! };
           switch (part.type) {
             case 'text-delta':
+              delivered = true;
               yield { type: 'text', text: part.text };
               break;
             case 'reasoning-delta':
+              delivered = true;
               yield { type: 'reasoning', text: part.text };
               break;
             case 'tool-input-start':
               // Arrives before the arguments finish streaming, so the UI can name
               // the tool while the model is still writing its input.
+              delivered = true;
               yield { type: 'tool-start', id: part.id, name: part.toolName };
               break;
             case 'tool-call':
@@ -448,6 +481,14 @@ export class Session {
               yield { type: 'done' };
               return;
             case 'error':
+              // A stale item is rejected before generation starts, so nothing has
+              // been said yet and the request can be rebuilt. Once output is on
+              // screen it cannot be unsent, and a retry would repeat it.
+              if (!delivered && isStaleItemError(part.error) && this.repairStaleItems()) {
+                yield { type: 'notice', text: STALE_ITEM_NOTICE };
+                staleRetry = true;
+                break;
+              }
               sawError = true;
               yield { type: 'error', error: part.error };
               break;
@@ -460,9 +501,17 @@ export class Session {
           yield { type: 'done' };
           return;
         }
+        if (!delivered && isStaleItemError(error) && this.repairStaleItems()) {
+          yield { type: 'notice', text: STALE_ITEM_NOTICE };
+          continue;
+        }
         yield { type: 'error', error };
         return;
       }
+
+      // The history was rewritten under this run, so its promise-shaped results
+      // describe a request that no longer stands. Run again rather than read them.
+      if (staleRetry) continue;
 
       // A stream that ended in an error has no response messages or usage to
       // await; touching them would throw NoOutputGeneratedError.
