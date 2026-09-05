@@ -5,7 +5,7 @@
  * fails inside the shipped binary. A constant is compiled in and always correct.
  * `scripts/release.ts` checks it against the release tag so the two cannot drift.
  */
-export const VERSION = '0.1.0-beta.4';
+export const VERSION = '0.1.0-beta.5';
 
 /** What `--version` prints: enough to identify a build from a bug report. */
 export function versionLine(): string {

@@ -131,7 +131,7 @@ disagrees with either:
 
 ```
 $ GITHUB_REF_NAME=v9.9.9 bun run release
-tag v9.9.9 does not match src/version.ts (0.1.0-beta.4). Bump the version or retag.
+tag v9.9.9 does not match src/version.ts (0.1.0-beta.5). Bump the version or retag.
 ```
 
 A binary reporting the wrong version is worse than a failed release.
@@ -140,8 +140,8 @@ To cut one:
 
 ```bash
 # bump src/version.ts and package.json to the same value
-git commit -am "release 0.1.0-beta.4"
-git tag v0.1.0-beta.4
+git commit -am "release 0.1.0-beta.5"
+git tag v0.1.0-beta.5
 git push --follow-tags
 ```
 

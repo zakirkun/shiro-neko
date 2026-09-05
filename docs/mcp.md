@@ -153,7 +153,7 @@ one tool for the session.
 A server that fails to start is reported and the session continues:
 
 ```
-shiro-neko 0.1.0-beta.4  openai/gpt-5  session 0193ab2c
+shiro-neko 0.1.0-beta.5  openai/gpt-5  session 0193ab2c
 mcp: 4 tools
 mcp db failed: spawn python ENOENT
 ```
