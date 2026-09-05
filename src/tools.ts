@@ -249,6 +249,20 @@ export const applyPatchTool = tool({
   },
 });
 
+/**
+ * A rewrite that collapses whitespace: similar character count, a fraction of the lines.
+ *
+ * A model under output pressure squeezes newlines and indentation before it cuts
+ * markup — the byte count stays close, the line count does not. That rewrite is
+ * rarely intended, so the result names it and the turn can fix it immediately.
+ */
+function collapsedRewrite(before: string, after: string): boolean {
+  if (before.length === 0) return false;
+  const ratio = after.length / before.length;
+  if (ratio < 0.5 || ratio > 1.5) return false;
+  return after.split('\n').length < before.split('\n').length / 2;
+}
+
 export const writeFileTool = tool({
   description: 'Create a file or overwrite it completely. Prefer edit_file for existing files.',
   inputSchema: z.object({
@@ -257,7 +271,16 @@ export const writeFileTool = tool({
   }),
   execute: async ({ path, content }) => {
     const abs = jail(path);
+    const before = await Bun.file(abs).exists() ? await Bun.file(abs).text() : undefined;
     await Bun.write(abs, content);
+
+    if (before !== undefined && collapsedRewrite(before, content)) {
+      const lines = content.split('\n').length;
+      return (
+        `Wrote ${content.length} chars to ${path}, but it collapsed ${before.split('\n').length} lines into ${lines}. ` +
+        'If that was not intended, re-send the content with its original newlines and indentation.'
+      );
+    }
     return `Wrote ${content.length} chars to ${path}`;
   },
 });
@@ -662,6 +685,55 @@ export const bashTool = tool({
   },
 });
 
+export const moveFileTool = tool({
+  description:
+    'Move or rename one file. Creates the target directory. Refuses if the source is missing or the target ' +
+    'already exists, so a rename cannot silently overwrite work. For a rename plus its callers in one step, ' +
+    'use apply_patch.',
+  inputSchema: z.object({
+    from: z.string().describe('Existing file path'),
+    to: z.string().describe('New path, including the filename'),
+  }),
+  execute: async ({ from, to }) => {
+    const source = jail(from);
+    const target = jail(to);
+    if (source === target) throw new Error('from and to are the same path');
+
+    const file = Bun.file(source);
+    if (!(await file.exists())) throw new Error(`No such file: ${from}`);
+    if (await Bun.file(target).exists()) throw new Error(`${to} already exists. Delete it first or pick another name.`);
+
+    await Bun.write(target, file);
+    await file.delete();
+    return `Moved ${from} to ${to}`;
+  },
+});
+
+export const deleteFileTool = tool({
+  description:
+    'Delete one file. Refuses a directory: removing a tree is what the guard plugin blocks in bash, and it is ' +
+    'not something to do implicitly. Delete the files you mean, one call each.',
+  inputSchema: z.object({
+    path: z.string().describe('File to delete'),
+  }),
+  execute: async ({ path }) => {
+    const abs = jail(path);
+
+    // Bun.file on a directory reports exists() false, so the stat is what
+    // distinguishes "missing" from "a directory" and gives the right refusal.
+    let entry: Awaited<ReturnType<typeof stat>>;
+    try {
+      entry = await stat(abs);
+    } catch {
+      throw new Error(`No such file: ${path}`);
+    }
+    if (entry.isDirectory()) throw new Error(`${path} is a directory. Delete its files individually.`);
+
+    await Bun.file(abs).delete();
+    return `Deleted ${path} (${entry.size} bytes)`;
+  },
+});
+
 export const tools = {
   read_file: readFileTool,
   read_many_files: readManyFilesTool,
@@ -669,6 +741,8 @@ export const tools = {
   edit_file: editFileTool,
   multi_edit: multiEditTool,
   apply_patch: applyPatchTool,
+  move_file: moveFileTool,
+  delete_file: deleteFileTool,
   list_dir: listDirTool,
   glob: globTool,
   grep: grepTool,
@@ -690,7 +764,7 @@ export const tools = {
  */
 export const TOOL_SETS = {
   core: ['read_file', 'write_file', 'edit_file', 'glob', 'grep', 'bash'],
-  'edit-plus': ['multi_edit', 'list_dir', 'read_many_files', 'apply_patch'],
+  'edit-plus': ['multi_edit', 'list_dir', 'read_many_files', 'apply_patch', 'move_file', 'delete_file'],
   git: GIT_TOOL_NAMES,
   net: NET_TOOL_NAMES,
 } as const satisfies Record<string, readonly string[]>;
@@ -722,6 +796,14 @@ export function disabledToolNames(enabled: readonly ToolSetName[] | undefined): 
 }
 
 /** Tools that mutate the workspace or run arbitrary code always ask the user first. */
-export const MUTATING_TOOLS = ['write_file', 'edit_file', 'multi_edit', 'apply_patch', 'bash'] as const;
+export const MUTATING_TOOLS = [
+  'write_file',
+  'edit_file',
+  'multi_edit',
+  'apply_patch',
+  'move_file',
+  'delete_file',
+  'bash',
+] as const;
 
 export { jail };

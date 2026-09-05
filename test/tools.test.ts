@@ -5,17 +5,22 @@ import { join } from 'node:path';
 import {
   applyPatchTool,
   bashTool,
+  deleteFileTool,
   editFileTool,
   globTool,
   grepTool,
   interruptBash,
   jail,
   listDirTool,
+  moveFileTool,
   multiEditTool,
+  MUTATING_TOOLS,
   onBashOutput,
   parsePatch,
   readFileTool,
   readManyFilesTool,
+  tools,
+  toolSetOf,
   writeFileTool,
 } from '../src/tools';
 
@@ -135,6 +140,99 @@ test('write_file then glob and grep find the content', async () => {
   expect(await run(grepTool, { pattern: 'port = \\d+', include: '**/*.ts' })).toBe(
     'src/app.ts:1: export const port = 8080;',
   );
+});
+
+test('overwriting a file with collapsed whitespace is flagged in the result', async () => {
+  const before = [
+    "@extends('layouts.app')",
+    "@section('content')",
+    '<section class="page-hero">',
+    '    <div class="container">',
+    '        <p>Explore homes</p>',
+    '    </div>',
+    '</section>',
+    '@endsection',
+    '',
+  ].join('\n');
+  await Bun.write(join(dir, 'index.blade.php'), before);
+
+  // What a compressed rewrite looks like: the same markup, most newlines gone.
+  const collapsed = before.replace(/\n\s*/g, '');
+  const out = await run(writeFileTool, { path: 'index.blade.php', content: collapsed });
+
+  expect(out).toContain('Wrote');
+  expect(out).toContain('newline');
+  expect(await Bun.file(join(dir, 'index.blade.php')).text()).toBe(collapsed);
+});
+
+test('a normal rewrite is not flagged', async () => {
+  await Bun.write(join(dir, 'a.ts'), 'const a = 1;\nconst b = 2;\n');
+  const out = await run(writeFileTool, { path: 'a.ts', content: 'const a = 10;\nconst b = 20;\n' });
+  expect(out).toBe('Wrote 28 chars to a.ts');
+
+  // And a genuine deletion is not either: fewer lines is fine when the content
+  // is also much shorter — the flag is for whitespace collapse, not truncation.
+  await Bun.write(join(dir, 'b.ts'), 'line 1\nline 2\nline 3\n');
+  const short = await run(writeFileTool, { path: 'b.ts', content: 'line 1\n' });
+  expect(short).toBe('Wrote 7 chars to b.ts');
+});
+
+test('move_file renames a file and creates the parent directory', async () => {
+  await Bun.write(join(dir, 'old.ts'), 'export const a = 1;\n');
+
+  const out = await run(moveFileTool, { from: 'old.ts', to: 'src/new.ts' });
+
+  expect(out).toContain('old.ts');
+  expect(out).toContain('src/new.ts');
+  expect(await Bun.file(join(dir, 'src/new.ts')).text()).toBe('export const a = 1;\n');
+  expect(await Bun.file(join(dir, 'old.ts')).exists()).toBe(false);
+});
+
+test('move_file refuses a missing source and an occupied target', async () => {
+  await Bun.write(join(dir, 'one.ts'), 'a\n');
+  await Bun.write(join(dir, 'two.ts'), 'b\n');
+
+  expect(run(moveFileTool, { from: 'gone.ts', to: 'x.ts' })).rejects.toThrow(/no such file/i);
+  expect(run(moveFileTool, { from: 'one.ts', to: 'two.ts' })).rejects.toThrow(/already exists/i);
+
+  // Neither refusal may have touched anything.
+  expect(await Bun.file(join(dir, 'one.ts')).text()).toBe('a\n');
+  expect(await Bun.file(join(dir, 'two.ts')).text()).toBe('b\n');
+});
+
+test('move_file refuses either path outside the workspace', async () => {
+  await Bun.write(join(dir, 'in.ts'), 'x\n');
+  expect(run(moveFileTool, { from: 'in.ts', to: '../escaped.ts' })).rejects.toThrow(/escapes workspace/);
+  expect(run(moveFileTool, { from: '../../etc/passwd', to: 'here.ts' })).rejects.toThrow(/escapes workspace/);
+});
+
+test('delete_file removes one file and reports it', async () => {
+  await Bun.write(join(dir, 'gone.ts'), 'x\n');
+
+  const out = await run(deleteFileTool, { path: 'gone.ts' });
+
+  expect(out).toContain('gone.ts');
+  expect(await Bun.file(join(dir, 'gone.ts')).exists()).toBe(false);
+});
+
+test('delete_file refuses a missing file, a directory, and an escaping path', async () => {
+  await Bun.write(join(dir, 'sub/keep.ts'), 'x\n');
+
+  expect(run(deleteFileTool, { path: 'nope.ts' })).rejects.toThrow(/no such file/i);
+  // A directory delete is recursive by nature, which is the one thing this must
+  // not do quietly: that is the guard plugin's `rm -rf` case.
+  expect(run(deleteFileTool, { path: 'sub' })).rejects.toThrow(/directory/i);
+  expect(run(deleteFileTool, { path: '../outside.ts' })).rejects.toThrow(/escapes workspace/);
+
+  expect(await Bun.file(join(dir, 'sub/keep.ts')).exists()).toBe(true);
+});
+
+test('both new write tools are gated and belong to a set', () => {
+  for (const name of ['move_file', 'delete_file']) {
+    expect(MUTATING_TOOLS as readonly string[]).toContain(name);
+    expect(toolSetOf(name)).toBe('edit-plus');
+    expect(Object.keys(tools)).toContain(name);
+  }
 });
 
 test('multi_edit applies every edit in order, each seeing the last', async () => {
