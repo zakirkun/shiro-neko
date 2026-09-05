@@ -265,4 +265,156 @@ Report the short hash and the subject. If a hook rewrote files, say so and confi
 final state is what was intended.
 `,
   },
+  {
+    name: 'security',
+    source: `---
+name: security
+description: Review code for security defects, or write code that handles untrusted input. Use when touching authentication, user input, file paths, shell commands, SQL, or anything reachable from the network.
+---
+
+# Security
+
+Find the trust boundary first. Everything crossing it is hostile until parsed.
+
+## The boundaries in most codebases
+
+- Request bodies, query strings, headers, cookies.
+- File contents and filenames, including paths a user supplied.
+- Environment variables in a multi-tenant deployment.
+- Anything a model or a third-party API returned.
+
+Inside a boundary, values are already validated and re-checking them is noise. At the
+boundary, nothing is optional.
+
+## What to look for, in order
+
+1. **Injection.** String-built SQL, shell commands assembled from input, \`eval\`, template
+   rendering with user data as the template rather than the data. The fix is parameters and
+   argument arrays, never escaping.
+2. **Missing authorisation.** An endpoint that checks *who* you are but not *what* you may
+   touch. Look for an id taken from the request and used without an ownership check.
+3. **Path traversal.** \`../\` in anything joined onto a filesystem root. Resolve, then verify
+   the result is still inside the root — a prefix check on the raw input misses
+   \`a/../../secret\`.
+4. **Secrets in the wrong place.** Keys in source, in logs, in error messages, in a commit.
+   A secret that reached a log is a secret to rotate.
+5. **Server-side request forgery.** A URL from input, fetched. Block private and loopback
+   addresses by *resolved* address, and re-check every redirect hop.
+6. **Weak crypto and hand-rolled auth.** Homemade token formats, \`Math.random\` for anything
+   security-bearing, comparisons on secrets that are not constant time.
+
+## What not to do
+
+Do not report a finding you cannot trace to a concrete input. "This could be unsafe" without
+a path from an attacker-controlled value to the sink is noise that buries the real one.
+
+Do not fix a symptom at one caller when the sink is shared. Grep every caller and fix the
+seam once.
+
+## Reporting
+
+File, line, the path from input to sink, and the fix. Say plainly when a thing that looks
+dangerous is actually fine, and why — a reviewer's confidence is worth as much as a finding.
+`,
+  },
+  {
+    name: 'perf',
+    source: `---
+name: perf
+description: Make something faster, or find out why it is slow. Use when a command, request, test suite, or build takes longer than it should.
+---
+
+# Performance
+
+Measure first. A change made without a number before it is a guess with extra steps.
+
+## Get a number
+
+Time the actual operation, not a proxy for it. \`time\`, the framework's own timing output,
+or a loop around the slow call with a timestamp either side. Record the baseline with
+\`remember\` so the comparison survives compaction.
+
+If you cannot measure it, say so and stop. Optimising an unmeasured path is how a codebase
+accumulates complexity that buys nothing.
+
+## Find where the time goes
+
+- **Wall-clock dominated by one call?** Look there and nowhere else.
+- **Spread evenly?** Suspect the loop around it: an O(n²) walk, a query per row, a file read
+  per iteration.
+- **Idle time?** It is waiting: a sequential chain of independent awaits, an unpooled
+  connection, a lock.
+
+The usual culprits, in the order they actually appear: N+1 queries, work repeated inside a
+loop that could be hoisted, a missing index, sequential awaits that could run together,
+reading a whole file to use one line, and re-parsing something that could be parsed once.
+
+## Change one thing
+
+One change, then re-measure. Two changes together and you do not know which one paid — and
+one of them may have cost.
+
+## Stop when it is fast enough
+
+State the target before you start: "the test suite under a minute", "the endpoint under
+200ms". Past the target, further work is complexity with no user on the other end of it.
+
+## Report
+
+Baseline, change, new number, and what you did not do. A 40% win with one line changed is a
+better report than a 45% win that restructured a module.
+`,
+  },
+  {
+    name: 'migrate',
+    source: `---
+name: migrate
+description: Upgrade a dependency, framework, or language version across a codebase. Use when a major version bump, a deprecation, or a breaking API change has to be applied.
+---
+
+# Migration
+
+The failure mode is a half-applied migration: it compiles, most tests pass, and one code
+path still uses the old API.
+
+## Read the changelog before the code
+
+Find what actually broke. A major version usually has a migration guide; read it and list
+the changes that apply to this codebase specifically. Below 1.0, treat a minor bump as
+breaking — semver promises nothing there.
+
+## Find every call site before changing one
+
+Grep for the old API across the whole repository, including tests, scripts, config, CI
+workflows, Dockerfiles, and documentation. A version literal pinned in a workflow while the
+manifest says something else is a split-brain deploy.
+
+Write the list down with \`todo_write\`. The list is the migration; the edits are mechanical.
+
+## Change in one shape
+
+Apply the same transformation everywhere rather than improving each site as you pass
+through it. A migration mixed with refactoring cannot be reviewed, and cannot be reverted
+if the upgrade turns out to be wrong.
+
+\`apply_patch\` is the tool for this: one atomic patch across the files that must land
+together.
+
+## Verify at the boundary that broke
+
+Type checks catch signature changes and miss behaviour changes. Run the tests, then actually
+use the thing that was upgraded: start the server, run the CLI, execute the query. A green
+suite over an untested upgrade path proves the suite did not cover it.
+
+## Never hand-merge a lockfile
+
+On a conflict, take either side whole and regenerate with the package manager. The resolver
+owns that file.
+
+## Report
+
+The version before and after, every file class touched, what you verified by running, and
+anything the changelog said applies that you deliberately did not do.
+`,
+  },
 ];
