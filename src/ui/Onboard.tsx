@@ -1,10 +1,11 @@
-import { Box, Text, useInput } from 'ink';
+﻿import { Box, Text, useInput } from 'ink';
 import SelectInput from 'ink-select-input';
 import TextInput from 'ink-text-input';
 import Spinner from 'ink-spinner';
 import React, { useCallback, useState } from 'react';
 import type { Config, ProviderName } from '../config';
 import { fetchModels, PRESETS, type ProviderPreset } from '../providers';
+import { Frame, Row } from './Pickers';
 
 export type OnboardResult = {
   presetId: string;
@@ -207,36 +208,4 @@ export function Onboard({
         </Frame>
       );
   }
-}
-
-function Frame({
-  title,
-  hint,
-  warning,
-  children,
-}: {
-  title: string;
-  hint?: string;
-  warning?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
-      <Text color="cyan" bold>
-        {title}
-      </Text>
-      {hint && <Text dimColor>{hint}</Text>}
-      {warning && <Text color="yellow">could not list models: {warning}</Text>}
-      {children}
-    </Box>
-  );
-}
-
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <Box>
-      <Text color="cyan">{label}: </Text>
-      {children}
-    </Box>
-  );
 }
