@@ -65,9 +65,18 @@ export function subjectOf(tool: string, input: unknown): string | undefined {
     case 'write_file':
     case 'edit_file':
     case 'multi_edit':
+    case 'delete_file':
     case 'list_dir':
     case 'git_blame':
       return str('path');
+    case 'move_file': {
+      // Both ends matter: a rule denying `src/generated/*` must catch a move that
+      // lands there as well as one that starts there.
+      const from = str('from');
+      const to = str('to');
+      const both = [from, to].filter((p): p is string => p !== undefined);
+      return both.length > 0 ? both.join(' ') : undefined;
+    }
     case 'web_fetch':
       return str('url');
     case 'apply_patch': {
@@ -113,7 +122,7 @@ export function subjectOf(tool: string, input: unknown): string | undefined {
  * them: denying `*.env` must catch a batch read that includes one, and denying
  * `src/generated/*` must catch a patch that touches one among five files.
  */
-const MULTI = new Set(['read_many_files', 'apply_patch']);
+const MULTI = new Set(['read_many_files', 'apply_patch', 'move_file']);
 
 const subjectsFor = (tool: string, subject: string): string[] =>
   MULTI.has(tool) ? subject.split(' ') : [subject];
@@ -170,6 +179,8 @@ export const DEFAULT_PERMISSIONS: PermissionConfig = {
   edit_file: 'ask',
   multi_edit: 'ask',
   apply_patch: 'ask',
+  move_file: 'ask',
+  delete_file: 'ask',
   bash: 'ask',
   web_fetch: 'ask',
 };
@@ -192,6 +203,8 @@ const FREE = new Set([
   'git_log',
   'git_show',
   'git_blame',
+  'git_branch',
+  'git_commit_message',
 ]);
 
 export type PermissionOptions = {
