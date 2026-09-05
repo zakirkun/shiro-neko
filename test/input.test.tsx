@@ -134,6 +134,73 @@ test('ctrl-u clears to the start of the line', async () => {
   app.unmount();
 }, 20_000);
 
+// Word-wise motion: the escape sequences a shell sends for ctrl-left/right.
+const CTRL_LEFT = '\u001B[1;5D';
+const CTRL_RIGHT = '\u001B[1;5C';
+
+test('ctrl-left jumps the cursor back one word', async () => {
+  const { app, session } = mount();
+  await wait(150);
+  await type(app, 'one two');
+  await press(app, CTRL_LEFT);
+  await type(app, 'X ');
+  await press(app, '\r', 500);
+  // Cursor was after "two"; a word jump puts it before it, so the X lands between.
+  expect(session.messages[0]?.content).toBe('one X two');
+  app.unmount();
+}, 20_000);
+
+test('ctrl-right jumps the cursor forward one word over a gap', async () => {
+  const { app, session } = mount();
+  await wait(150);
+  await press(app, 'one two', 150);
+  // Back before "one", then one word forward: the jump crosses the word and stops
+  // at its end, not one character along.
+  await press(app, CTRL_LEFT);
+  await press(app, CTRL_LEFT);
+  await press(app, CTRL_RIGHT);
+  await type(app, 'X');
+  await press(app, '\r', 500);
+  expect(session.messages[0]?.content).toBe('oneX two');
+  app.unmount();
+}, 20_000);
+
+test('a word jump over the line edge stays put', async () => {
+  const { app, session } = mount();
+  await wait(150);
+  await type(app, 'abc');
+  // Three jumps past the start: the cursor must clamp, not walk off the string.
+  await press(app, CTRL_LEFT);
+  await press(app, CTRL_LEFT);
+  await type(app, 'X');
+  await press(app, '\r', 500);
+  expect(session.messages[0]?.content).toBe('Xabc');
+  app.unmount();
+}, 20_000);
+
+test('ctrl-d deletes forward from the cursor', async () => {
+  const { app, session } = mount();
+  await wait(150);
+  await type(app, 'abcd');
+  // Back to the start, then delete two characters forward.
+  await press(app, '\u0001');
+  await press(app, '\u0004');
+  await press(app, '\u0004');
+  await press(app, '\r', 500);
+  expect(session.messages[0]?.content).toBe('cd');
+  app.unmount();
+}, 20_000);
+
+test('ctrl-d at the end of the line deletes nothing', async () => {
+  const { app, session } = mount();
+  await wait(150);
+  await type(app, 'end');
+  await press(app, '\u0004');
+  await press(app, '\r', 500);
+  expect(session.messages[0]?.content).toBe('end');
+  app.unmount();
+}, 20_000);
+
 test('a pasted multi-character chunk is inserted whole', async () => {
   const { app, session } = mount();
   await wait(150);

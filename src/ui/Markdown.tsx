@@ -48,7 +48,22 @@ function BlockView({ block, width }: { block: Block; width: number }) {
       );
     case 'paragraph':
       return <Inline spans={block.spans} />;
-    case 'bullet':
+    case 'bullet': {
+      // A markdown task list: `- [x] done`. The checkbox is the marker, and the
+      // text of a done task reads as already read — dimmed and struck through,
+      // the same treatment the todo panel gives a finished entry.
+      const task = /^\[( |x)\]\s+(.*)$/.exec(block.spans.map((s) => s.text).join(''));
+      if (task) {
+        const done = task[1] === 'x';
+        return (
+          <Box>
+            <Text dimColor>{`${'  '.repeat(block.indent)}${done ? '[x]' : '[ ]'} `}</Text>
+            <Text strikethrough={done} dimColor={done}>
+              <Inline spans={parseInline(task[2]!)} />
+            </Text>
+          </Box>
+        );
+      }
       return (
         <Box>
           <Text dimColor>{`${'  '.repeat(block.indent)}${block.marker} `}</Text>
@@ -57,6 +72,7 @@ function BlockView({ block, width }: { block: Block; width: number }) {
           </Box>
         </Box>
       );
+    }
     case 'quote':
       return (
         <Box>

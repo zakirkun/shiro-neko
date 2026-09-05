@@ -50,6 +50,45 @@ test('the rendered diff marks additions and removals and counts them', () => {
   app.unmount();
 });
 
+test('changed lines carry their line numbers, old and new', () => {
+  const before = ['one', 'two', 'three'].join('\n');
+  const after = ['one', 'TWO', 'three'].join('\n');
+  const app = render(<Diff before={before} after={after} />);
+
+  const frame = app.lastFrame() ?? '';
+  // `two` was line 2 before and `TWO` is line 2 after: a diff without numbers
+  // forces the reader to count them, which is exactly what the panel is for.
+  expect(frame).toMatch(/2.*- two/);
+  expect(frame).toMatch(/2.*\+ TWO/);
+  app.unmount();
+});
+
+test('a gap names the line range it hides, so the reader can jump there', () => {
+  const lines = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`).join('\n');
+  const app = render(<Diff before={lines} after={lines.replace('line 30', 'CHANGED')} />);
+
+  const frame = app.lastFrame() ?? '';
+  expect(frame).toContain('CHANGED');
+  // "27 unchanged lines" says how much; "lines 1-27" says where, which is what a
+  // reader needs to open the file at the right place.
+  expect(frame).toMatch(/lines \d+-\d+/);
+  app.unmount();
+});
+
+test('added and removed lines count up separately through one diff', () => {
+  const before = ['a', 'b'].join('\n');
+  const after = ['a', 'B', 'c', 'd'].join('\n');
+  const app = render(<Diff before={before} after={after} path="src/x.ts" />);
+
+  // The header is the part a reader scans for: +3 -1 answers "how big was this"
+  // before the lines are read at all.
+  const frame = app.lastFrame() ?? '';
+  expect(frame).toContain('+3');
+  expect(frame).toContain('-1');
+  expect(frame).toContain('src/x.ts');
+  app.unmount();
+});
+
 test('a very large diff is truncated with a notice', () => {
   const before = Array.from({ length: 200 }, (_, i) => `line ${i}`).join('\n');
   const after = Array.from({ length: 200 }, (_, i) => `changed ${i}`).join('\n');

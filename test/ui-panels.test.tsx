@@ -20,6 +20,24 @@ test('markdown renders headings, bullets, and code distinctly', () => {
   app.unmount();
 });
 
+test('a task list renders as checkboxes, not as literal brackets', () => {
+  // Models write progress as markdown task lists. Rendering "- [x] done" literally
+  // turns a status report into markup noise.
+  const app = render(<Markdown text={'- [x] first\n- [ ] second'} />);
+  const frame = app.lastFrame() ?? '';
+  expect(frame).toContain('[x] first');
+  expect(frame).toContain('[ ] second');
+  app.unmount();
+});
+
+test('an ordered list keeps its numbers rather than becoming dashes', () => {
+  const app = render(<Markdown text={'1. first step\n2. second step'} />);
+  const frame = app.lastFrame() ?? '';
+  expect(frame).toContain('1. first step');
+  expect(frame).toContain('2. second step');
+  app.unmount();
+});
+
 test('markdown strips the markup characters from the rendered output', () => {
   const app = render(<Markdown text={'Use **bold** and `code` here.'} />);
   const frame = app.lastFrame() ?? '';

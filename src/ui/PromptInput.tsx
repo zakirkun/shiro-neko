@@ -71,6 +71,22 @@ export function PromptInput({
     setCursor(clamped);
   };
 
+  /** Position after the next run of spaces, i.e. the start of the following word. */
+  const wordForward = (from: number) => {
+    let at = from;
+    while (at < value.length && value[at] === ' ') at++;
+    while (at < value.length && value[at] !== ' ') at++;
+    return at;
+  };
+
+  /** Position before the run of spaces preceding the current word. */
+  const wordBack = (from: number) => {
+    let at = from;
+    while (at > 0 && value[at - 1] === ' ') at--;
+    while (at > 0 && value[at - 1] !== ' ') at--;
+    return at;
+  };
+
   useInput(
     (input, key) => {
       if (onKey?.(input, key as KeyLike)) return;
@@ -98,6 +114,14 @@ export function PromptInput({
         return;
       }
 
+      // Word-wise motion. Terminals send ctrl-left/right as a modified arrow, but
+      // Ink reports some of these sequences as a plain input with ctrl held rather
+      // than as key.leftArrow, so both shapes are handled.
+      const wordLeft = key.leftArrow && (key.ctrl || key.meta);
+      const wordRight = key.rightArrow && (key.ctrl || key.meta);
+      if (wordLeft) return setCursor((c) => wordBack(c));
+      if (wordRight) return setCursor((c) => wordForward(c));
+
       if (key.leftArrow) return setCursor((c) => Math.max(0, c - 1));
       if (key.rightArrow) return setCursor((c) => Math.min(value.length, c + 1));
       if (key.home || (key.ctrl && input === 'a')) return setCursor(0);
@@ -105,6 +129,9 @@ export function PromptInput({
 
       if (key.ctrl && input === 'k') return set(value.slice(0, cursor), cursor);
       if (key.ctrl && input === 'u') return set(value.slice(cursor), 0);
+      // The delete key's forward cousin: without it, fixing a typo ahead of the
+      // cursor means walking to the end or backspacing and retyping the tail.
+      if (key.ctrl && input === 'd') return set(value.slice(0, cursor) + value.slice(cursor + 1), cursor);
       if (key.ctrl && input === 'w') {
         const upto = value.slice(0, cursor);
         const trimmed = upto.replace(/\S+\s*$/, '');

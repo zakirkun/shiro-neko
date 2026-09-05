@@ -1,11 +1,14 @@
 import { Box, Text } from 'ink';
 import React from 'react';
 
-export type DiffLine = { kind: 'context' | 'add' | 'remove'; text: string };
+export type DiffLine = { kind: 'context' | 'add' | 'remove'; text: string; at: number };
 
 /**
  * Line-level diff by longest common subsequence. O(n*m) is fine here because an
  * edit_file payload is a handful of lines, not a whole file.
+ *
+ * `at` is the 1-based line number in the file the line came from: the reader's copy
+ * for a removal, the changed copy for an addition, either for context.
  */
 export function diffLines(before: string, after: string): DiffLine[] {
   const a = before.split('\n');
@@ -25,44 +28,59 @@ export function diffLines(before: string, after: string): DiffLine[] {
   let j = 0;
   while (i < n && j < m) {
     if (a[i] === b[j]) {
-      out.push({ kind: 'context', text: a[i]! });
+      out.push({ kind: 'context', text: a[i]!, at: i + 1 });
       i++;
       j++;
     } else if (lcs[i + 1]![j]! >= lcs[i]![j + 1]!) {
-      out.push({ kind: 'remove', text: a[i]! });
+      out.push({ kind: 'remove', text: a[i]!, at: i + 1 });
       i++;
     } else {
-      out.push({ kind: 'add', text: b[j]! });
+      out.push({ kind: 'add', text: b[j]!, at: j + 1 });
       j++;
     }
   }
-  while (i < n) out.push({ kind: 'remove', text: a[i++]! });
-  while (j < m) out.push({ kind: 'add', text: b[j++]! });
+  while (i < n) out.push({ kind: 'remove', text: a[i]!, at: i + 1 }), i++;
+  while (j < m) out.push({ kind: 'add', text: b[j]!, at: j + 1 }), j++;
   return out;
 }
 
-/** Drops runs of unchanged lines longer than `context` on both sides of a change. */
-export function collapseContext(lines: DiffLine[], context = 2): (DiffLine | { kind: 'gap'; count: number })[] {
+/**
+ * Drops runs of unchanged lines longer than `context` on both sides of a change.
+ *
+ * A gap carries the line range it hides rather than only a count: "27 unchanged
+ * lines" says how much was skipped, "lines 1-27" says where in the file the reader
+ * is, which is what they actually need when they go and open it.
+ */
+export function collapseContext(
+  lines: DiffLine[],
+  context = 2,
+): (DiffLine | { kind: 'gap'; count: number; from: number; to: number })[] {
   const keep = new Set<number>();
   lines.forEach((line, i) => {
     if (line.kind === 'context') return;
     for (let k = i - context; k <= i + context; k++) if (k >= 0 && k < lines.length) keep.add(k);
   });
 
-  const out: (DiffLine | { kind: 'gap'; count: number })[] = [];
-  let skipped = 0;
+  const out: (DiffLine | { kind: 'gap'; count: number; from: number; to: number })[] = [];
+  let skipped: DiffLine[] = [];
   lines.forEach((line, i) => {
     if (keep.has(i)) {
-      if (skipped > 0) {
-        out.push({ kind: 'gap', count: skipped });
-        skipped = 0;
+      if (skipped.length > 0) {
+        const first = skipped[0]!;
+        const last = skipped.at(-1)!;
+        out.push({ kind: 'gap', count: skipped.length, from: first.at, to: last.at });
+        skipped = [];
       }
       out.push(line);
     } else {
-      skipped++;
+      skipped.push(line);
     }
   });
-  if (skipped > 0) out.push({ kind: 'gap', count: skipped });
+  if (skipped.length > 0) {
+    const first = skipped[0]!;
+    const last = skipped.at(-1)!;
+    out.push({ kind: 'gap', count: skipped.length, from: first.at, to: last.at });
+  }
   return out;
 }
 
@@ -84,17 +102,13 @@ export function Diff({ before, after, path }: { before: string; after: string; p
       )}
       {shown.map((line, i) =>
         line.kind === 'gap' ? (
-          <Text key={i} dimColor>
-            {`   ... ${line.count} unchanged line${line.count === 1 ? '' : 's'}`}
-          </Text>
+          <Text key={i} dimColor>{`   ... lines ${line.from}-${line.to} unchanged`}</Text>
         ) : (
           <Text
             key={i}
             color={line.kind === 'add' ? 'green' : line.kind === 'remove' ? 'red' : undefined}
             dimColor={line.kind === 'context'}
-          >
-            {`${line.kind === 'add' ? ' + ' : line.kind === 'remove' ? ' - ' : '   '}${line.text}`}
-          </Text>
+          >{` ${String(line.at).padStart(3)} ${line.kind === 'add' ? '+' : line.kind === 'remove' ? '-' : ' '} ${line.text}`}</Text>
         ),
       )}
       {hidden > 0 && <Text dimColor>{`   ... ${hidden} more diff lines`}</Text>}
