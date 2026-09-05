@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { variantByName } from '../src/agents';
+import { createCommitMessageTool } from '../src/commit';
 import { Memory } from '../src/memory';
 import { createHost } from '../src/plugins';
 import { guardPlugin, timePlugin } from '../src/plugins-builtin';
@@ -244,7 +245,15 @@ test('afterTurn fires once the turn ends', async () => {
 
 test('the git tools are offered by default and never prompt', async () => {
   const { seen, model } = recorder();
-  const session = new Session({ model, askApproval: async () => 'deny' });
+  // git_commit_message is model-built, so it joins through extraTools the way
+  // cli.tsx wires it; the static five come with the session.
+  const session = new Session({
+    model,
+    askApproval: async () => {
+      throw new Error('a git tool must never prompt');
+    },
+    extraTools: { git_commit_message: createCommitMessageTool({ model }) },
+  });
   for await (const _ of session.send('what changed')) void _;
 
   const offered = (seen[0]?.tools ?? []).map((t) => t.name);

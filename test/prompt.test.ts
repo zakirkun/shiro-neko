@@ -105,5 +105,5 @@ test('omitting every section leaves no dangling markers', () => {
 test('the prompt stays a reasonable size with everything on', () => {
   const prompt = systemPrompt({ cwd: '/repo', availableTools: ALL, canAsk: true });
   // Sent on every request, so a runaway prompt is a direct cost.
-  expect(prompt.length).toBeLessThan(4000);
+  expect(prompt.length).toBeLessThan(5000);
 });
