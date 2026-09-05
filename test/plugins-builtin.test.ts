@@ -3,14 +3,16 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHost } from '../src/plugins';
-import { BUILTIN_PLUGINS, DEFAULT_ENABLED, formatPlugin, secretsPlugin } from '../src/plugins-builtin';
+import { BUILTIN_PLUGINS, DEFAULT_ENABLED, formatPlugin, protectPlugin, secretsPlugin } from '../src/plugins-builtin';
 
 const cwd = process.cwd();
 const check = (toolName: string, input: unknown) => secretsPlugin.beforeToolCall!({ toolName, input, cwd });
+const guarded = (toolName: string, input: unknown) => protectPlugin.beforeToolCall!({ toolName, input, cwd });
 
 test('secrets is on by default, because an opt-in safety check is not one', () => {
   expect(DEFAULT_ENABLED).toContain('secrets');
   expect(DEFAULT_ENABLED).toContain('guard');
+  expect(DEFAULT_ENABLED).toContain('protect');
   // Both of these act on their own rather than refusing, so they are opt-in.
   expect(DEFAULT_ENABLED).not.toContain('bell');
   expect(DEFAULT_ENABLED).not.toContain('format');
@@ -41,7 +43,7 @@ test('writing a registry or credential file is refused', async () => {
 });
 
 test('every write tool is covered, including apply_patch', async () => {
-  for (const tool of ['write_file', 'edit_file', 'multi_edit']) {
+  for (const tool of ['write_file', 'edit_file', 'multi_edit', 'delete_file']) {
     expect(await check(tool, { path: '.env' }), tool).toContain('refusing to write');
   }
 
@@ -50,6 +52,59 @@ test('every write tool is covered, including apply_patch', async () => {
   const patch = '*** Update File: src/app.ts\n-a\n+b\n*** Add File: .env\n+SECRET=x';
   expect(await check('apply_patch', { patch })).toContain('refusing to write');
   expect(await check('apply_patch', { patch: '*** Move to: .env.production\n' })).toContain('refusing to write');
+
+  // A move carries two paths and neither is called `path`.
+  expect(await check('move_file', { from: 'src/app.ts', to: '.env' })).toContain('refusing to write');
+  expect(await check('move_file', { from: '.env', to: 'src/app.ts' })).toContain('refusing to write');
+});
+
+test('protect refuses git internals, lockfiles, dependencies, and build output', async () => {
+  for (const path of [
+    '.git/config',
+    '.git/hooks/pre-commit',
+    'bun.lock',
+    'package-lock.json',
+    'Cargo.lock',
+    'go.sum',
+    'node_modules/react/index.js',
+    'vendor/github.com/pkg/errors.go',
+    'dist/bundle.js',
+    'coverage/lcov.info',
+    '.next/build-manifest.json',
+  ]) {
+    expect(await guarded('write_file', { path }), path).toContain('refusing to write');
+  }
+});
+
+test('protect covers every write tool and both ends of a move', async () => {
+  for (const tool of ['write_file', 'edit_file', 'multi_edit', 'delete_file']) {
+    expect(await guarded(tool, { path: 'bun.lock' }), tool).toContain('refusing to write');
+  }
+  expect(await guarded('apply_patch', { patch: '*** Update File: bun.lock\n-a\n+b' })).toContain('refusing to write');
+  expect(await guarded('move_file', { from: 'src/a.ts', to: 'node_modules/a.ts' })).toContain('refusing to write');
+});
+
+test('protect matches a Windows path separator as well', async () => {
+  expect(await guarded('write_file', { path: 'node_modules\\react\\index.js' })).toContain('refusing to write');
+  expect(await guarded('write_file', { path: '.git\\config' })).toContain('refusing to write');
+});
+
+test('protect leaves ordinary files and lookalike names alone', async () => {
+  for (const path of [
+    'src/app.ts',
+    'docs/dist-layout.md',
+    'src/gitignore-parser.ts',
+    'test/node_modules-resolution.test.ts',
+    'package.json',
+    'distributed/queue.ts',
+  ]) {
+    expect(await guarded('write_file', { path }), path).toBeUndefined();
+  }
+});
+
+test('protect says what to do instead of editing the file', async () => {
+  expect(protectPlugin.appendix).toContain('package manager');
+  expect(String(await guarded('write_file', { path: 'bun.lock' }))).toContain('Regenerate it');
 });
 
 test('ordinary source files are untouched', async () => {
