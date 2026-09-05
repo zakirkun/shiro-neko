@@ -1,133 +1,41 @@
-import { Box, Static, Text, useApp, useInput, useStdout } from 'ink';
-import SelectInput from 'ink-select-input';
-import Spinner from 'ink-spinner';
+﻿import { Box, Static, Text, useApp, useInput, useStdout } from 'ink';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { parseCommand, matchCommands, type CommandSpec } from '../commands';
+import { parseCommand, matchCommands } from '../commands';
 import { THINKING_LEVELS, VARIANTS } from '../agents';
 import { completePath, matchPaths, pathToken } from '../complete';
 import type { Config } from '../config';
-import { TODO_MARK, type NotebookState } from '../notebook';
+import { type NotebookState } from '../notebook';
 import { costOf, formatUsd, usageLine } from '../pricing';
-import type { ApprovalDecision, ApprovalRequest, Session } from '../session';
-import type { SubagentEvent } from '../subagent';
+import type { Session } from '../session';
 import { interruptBash, toolSetOf } from '../tools';
 import { AskPanel, type AskBridge, type AskPending } from './Ask';
-import { Diff } from './Diff';
+import { Approval, createApprovalBridge, type ApprovalBridge, type Pending } from './Approval';
+import { applySubagentEvent, createNoticeBus, createSubagentBus, type NoticeBus, type SubagentBus } from './buses';
 import { Markdown } from './Markdown';
+import { McpAdd, type McpAddResult } from './McpAdd';
 import { Onboard, type OnboardResult } from './Onboard';
-import { InfoPanel, OutputPanel, QueuePanel, RegistryPanel, InstallPrompt, StatusBar, SubagentPanel, ThinkingPanel, TodoPanel, ActiveTool, FileMenu, type RegistryRow, type SubagentView } from './Panels';
+import {
+  InfoPanel,
+  OutputPanel,
+  QueuePanel,
+  RegistryPanel,
+  StatusBar,
+  SubagentPanel,
+  ThinkingPanel,
+  TodoPanel,
+  ActiveTool,
+  FileMenu,
+  Working,
+  type RegistryRow,
+  type SubagentView,
+} from './Panels';
+import { CommandMenu, InstallConfirm, Picker } from './Pickers';
+import { contextPanel, costPanel, todosPanel, toolsPanel } from './panel-bodies';
 import { PromptInput } from './PromptInput';
+import { nextKey, resultSummary, toolDetail, withResult, type Line, type NewLine } from './transcript';
 
-type Line =
-  | { key: string; kind: 'user'; text: string }
-  | { key: string; kind: 'assistant'; text: string }
-  | { key: string; kind: 'tool'; name: string; detail: string[]; result?: string; ok: boolean }
-  | { key: string; kind: 'info'; text: string }
-  | { key: string; kind: 'error'; text: string };
-
-type NewLine = Line extends infer T ? (T extends Line ? Omit<T, 'key'> : never) : never;
-
-type Pending = { req: ApprovalRequest; resolve: (d: ApprovalDecision) => void };
-
-/** Bridges Session's promise-based approval callback into React state. */
-export type ApprovalBridge = {
-  bind: (fn: (p: Pending | undefined) => void) => void;
-  ask: (req: ApprovalRequest) => Promise<ApprovalDecision>;
-};
-
-export function createApprovalBridge(): ApprovalBridge {
-  let setter: ((p: Pending | undefined) => void) | undefined;
-  return {
-    bind(fn) {
-      setter = fn;
-    },
-    ask(req) {
-      return new Promise((resolve) => {
-        if (!setter) return resolve('deny'); // UI not mounted: fail closed
-        setter({
-          req,
-          resolve: (d) => {
-            setter?.(undefined);
-            resolve(d);
-          },
-        });
-      });
-    },
-  };
-}
-
-/** One-way channel for out-of-band notices, e.g. an endpoint fallback. */
-export type NoticeBus = {
-  bind: (fn: (text: string) => void) => void;
-  emit: (text: string) => void;
-};
-
-export function createNoticeBus(): NoticeBus {
-  const queued: string[] = [];
-  let sink: ((text: string) => void) | undefined;
-  return {
-    bind(fn) {
-      sink = fn;
-      for (const text of queued.splice(0)) fn(text);
-    },
-    emit(text) {
-      if (sink) sink(text);
-      else queued.push(text);
-    },
-  };
-}
-
-/** Subagent progress, from the task tool to the panel. */
-export type SubagentBus = {
-  bind: (fn: (event: SubagentEvent) => void) => void;
-  emit: (event: SubagentEvent) => void;
-};
-
-export function createSubagentBus(): SubagentBus {
-  const queued: SubagentEvent[] = [];
-  let sink: ((event: SubagentEvent) => void) | undefined;
-  return {
-    bind(fn) {
-      sink = fn;
-      for (const event of queued.splice(0)) fn(event);
-    },
-    emit(event) {
-      if (sink) sink(event);
-      else queued.push(event);
-    },
-  };
-}
-
-/** Folds a subagent event into the panel's view, keeping finished agents visible. */
-export function applySubagentEvent(current: SubagentView[], event: SubagentEvent): SubagentView[] {
-  switch (event.type) {
-    case 'start':
-      return [
-        ...current,
-        { id: event.id, kind: event.kind, description: event.description, steps: [], status: 'running' },
-      ];
-    case 'step':
-      return current.map((a) =>
-        a.id === event.id ? { ...a, steps: [...a.steps, { tool: event.tool, summary: event.summary }] } : a,
-      );
-    case 'result':
-      // Attaches to the step it answers rather than appending, so a subagent's
-      // step count stays the number of calls it made.
-      return current.map((a) => {
-        if (a.id !== event.id) return a;
-        const last = a.steps.at(-1);
-        if (!last || last.tool !== event.tool || last.outcome !== undefined) return a;
-        return {
-          ...a,
-          steps: [...a.steps.slice(0, -1), { ...last, outcome: event.summary, ok: event.ok }],
-        };
-      });
-    case 'end':
-      return current.map((a) => (a.id === event.id ? { ...a, status: event.ok ? 'done' : 'failed' } : a));
-    case 'error':
-      return current.map((a) => (a.id === event.id ? { ...a, status: 'failed', error: event.message } : a));
-  }
-}
+export { createApprovalBridge, createNoticeBus, createSubagentBus, applySubagentEvent };
+export type { ApprovalBridge, NoticeBus, SubagentBus };
 
 /** Everything the slash commands need from the outside world. */
 export type AppHooks = {
@@ -160,269 +68,18 @@ export type AppHooks = {
     install: (name: string) => Promise<string>;
     remove: (name: string) => Promise<string>;
   };
+  /** Configured MCP servers, and the add/remove actions that write config.json. */
+  mcp: {
+    names: () => string[];
+    list: () => string;
+    add: (result: McpAddResult) => Promise<string>;
+    remove: (name: string) => Promise<string>;
+  };
   /** Prompt to hand the model for /init. */
   initPrompt: string;
   history: string[];
   recordPrompt: (text: string) => void;
 };
-
-let seq = 0;
-const nextKey = () => `l${seq++}`;
-
-function preview(input: unknown): string {
-  if (input === null || typeof input !== 'object') return String(input);
-  const o = input as Record<string, unknown>;
-  const first = o['command'] ?? o['path'] ?? o['pattern'] ?? o['url'] ?? o['description'] ?? o['question'] ?? o['name'];
-  if (typeof first === 'string') return first.length > 90 ? `${first.slice(0, 90)}...` : first;
-
-  // A tool with no obvious label, e.g. todo_write, gets a shape rather than a
-  // JSON dump; the panels below already show the content.
-  const todos = o['todos'];
-  if (Array.isArray(todos)) return `${todos.length} task${todos.length === 1 ? '' : 's'}`;
-  const keys = Object.keys(o);
-  return keys.length === 0 ? '' : keys.slice(0, 3).join(', ');
-}
-
-const clip = (s: string, n = 68) => (s.length > n ? `${s.slice(0, n)}...` : s);
-
-/**
- * The arguments that matter for one call, one per line.
- *
- * `preview` picks a single field, which loses exactly the information a reader
- * wants: a `read_file` with an offset, a `grep` scoped by `include`, the twenty
- * paths a batch read is about to pull in. This is what goes under the tool line in
- * the transcript and beside the spinner while a call is in flight.
- */
-export function toolDetail(name: string, input: unknown): string[] {
-  if (input === null || typeof input !== 'object') return [];
-  const o = input as Record<string, unknown>;
-  const str = (k: string) => (typeof o[k] === 'string' ? (o[k] as string) : undefined);
-  const num = (k: string) => (typeof o[k] === 'number' ? (o[k] as number) : undefined);
-  const bool = (k: string) => o[k] === true;
-
-  switch (name) {
-    case 'read_file': {
-      const range = num('offset') ? `lines ${num('offset')}${num('limit') ? `-${num('offset')! + num('limit')! - 1}` : '+'}` : undefined;
-      return [clip(str('path') ?? ''), ...(range ? [range] : [])];
-    }
-    case 'read_many_files': {
-      const files = Array.isArray(o['files']) ? (o['files'] as { path?: unknown }[]) : [];
-      const paths = files.map((f) => (typeof f.path === 'string' ? f.path : '?'));
-      // Every path, not a count: the point of showing this is knowing what is
-      // about to enter the context.
-      return paths.slice(0, 8).map(clip).concat(paths.length > 8 ? [`... ${paths.length - 8} more`] : []);
-    }
-    case 'write_file': {
-      const content = str('content') ?? '';
-      return [clip(str('path') ?? ''), `${content.split('\n').length} lines, ${content.length} chars`];
-    }
-    case 'edit_file': {
-      const old = str('oldString') ?? '';
-      return [
-        clip(str('path') ?? ''),
-        `- ${clip(old.split('\n')[0] ?? '', 60)}${old.includes('\n') ? ` (+${old.split('\n').length - 1} lines)` : ''}`,
-        ...(bool('replaceAll') ? ['every occurrence'] : []),
-      ];
-    }
-    case 'multi_edit': {
-      const edits = Array.isArray(o['edits']) ? (o['edits'] as { oldString?: unknown }[]) : [];
-      return [
-        clip(str('path') ?? ''),
-        ...edits.slice(0, 5).map((e, i) => {
-          const old = typeof e.oldString === 'string' ? e.oldString : '';
-          return `${i + 1}. - ${clip(old.split('\n')[0] ?? '', 58)}`;
-        }),
-        ...(edits.length > 5 ? [`... ${edits.length - 5} more edits`] : []),
-      ];
-    }
-    case 'apply_patch': {
-      const patch = str('patch') ?? '';
-      const ops = [...patch.matchAll(/^\*\*\* (Add|Update|Delete) File: (.+)$/gm)].map(
-        (m) => `${m[1]!.toLowerCase()} ${m[2]!.trim()}`,
-      );
-      const moves = [...patch.matchAll(/^\*\*\* Move to: (.+)$/gm)].map((m) => `move to ${m[1]!.trim()}`);
-      return [...ops, ...moves].slice(0, 10).map(clip);
-    }
-    case 'bash': {
-      const timeout = num('timeout');
-      return [
-        ...(str('command') ?? '').split('\n').slice(0, 4).map((l) => clip(l)),
-        ...(timeout ? [`timeout ${Math.round(timeout / 1000)}s`] : []),
-      ];
-    }
-    case 'grep': {
-      const parts = [`/${str('pattern') ?? ''}/`];
-      if (str('include')) parts.push(`in ${str('include')}`);
-      if (bool('ignoreCase')) parts.push('case-insensitive');
-      if (bool('includeIgnored')) parts.push('including ignored files');
-      return [clip(parts.join('  '), 90)];
-    }
-    case 'glob':
-      return [clip(str('pattern') ?? ''), ...(bool('includeIgnored') ? ['including ignored files'] : [])];
-    case 'list_dir':
-      return [clip(str('path') ?? '.'), `depth ${num('depth') ?? 2}`];
-    case 'web_fetch':
-      return [clip(str('url') ?? '', 90)];
-    case 'task': {
-      const kind = str('kind') ?? 'explore';
-      return [`${kind}${kind === 'worker' ? ' (writes)' : ''}: ${clip(str('description') ?? '')}`];
-    }
-    case 'todo_write': {
-      const todos = Array.isArray(o['todos']) ? (o['todos'] as { content?: unknown; status?: unknown }[]) : [];
-      return todos.slice(0, 6).map((t) => `${String(t.status ?? '')}: ${clip(String(t.content ?? ''), 56)}`);
-    }
-    case 'git_show':
-      return [str('ref') ?? '', ...(str('path') ? [clip(str('path')!)] : [])];
-    case 'git_log':
-      return [`${num('limit') ?? 15} commits`, ...(str('path') ? [clip(str('path')!)] : [])];
-    case 'git_diff':
-      return [bool('staged') ? 'staged' : 'working tree', ...(str('path') ? [clip(str('path')!)] : [])];
-    case 'git_blame': {
-      const from = num('startLine');
-      return [clip(str('path') ?? ''), ...(from ? [`lines ${from}-${num('endLine') ?? from + 40}`] : [])];
-    }
-    case 'remember':
-      return [`${str('kind') ?? 'fact'}: ${clip(str('text') ?? '', 60)}`];
-    case 'recall':
-    case 'forget':
-      return [clip(str('query') ?? str('text') ?? '')];
-    case 'skill':
-      return [str('name') ?? ''];
-    default: {
-      const label = preview(input);
-      return label ? [clip(label, 90)] : [];
-    }
-  }
-}
-
-/** First line of a tool result, so the transcript shows an outcome not just a call. */
-export function resultSummary(name: string, output: unknown): string {
-  const text = typeof output === 'string' ? output : JSON.stringify(output ?? '');
-  if (!text) return '';
-
-  const lines = text.split('\n').filter((l) => l.trim().length > 0);
-  const first = lines[0] ?? '';
-
-  // grep and glob return one hit per line, so the count is the useful summary.
-  if (name === 'grep' || name === 'glob') {
-    if (/^No (matches|files matched)/.test(first)) return first;
-    return `${lines.length} ${name === 'grep' ? 'hit' : 'path'}${lines.length === 1 ? '' : 's'}`;
-  }
-  if (name === 'read_file' || name === 'read_many_files') return `${lines.length} lines`;
-  if (name === 'bash') {
-    const exit = /^exit: (\d+)/.exec(first);
-    return exit ? `exit ${exit[1]}${lines.length > 1 ? `, ${lines.length - 1} lines out` : ''}` : clip(first);
-  }
-  return clip(first, 78);
-}
-
-/**
- * Attaches a result to the most recent unanswered call of that tool.
- *
- * Matched on name rather than call id because the transcript is a flat list of
- * committed lines, and a parallel pair of calls to the same tool is rare enough
- * that "the newest one still waiting" is right in practice and cheap.
- */
-function withResult(lines: Line[], name: string, result: string, ok: boolean): Line[] {
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i]!;
-    if (line.kind !== 'tool' || line.name !== name || line.result !== undefined) continue;
-    const next = [...lines];
-    next[i] = { ...line, result, ok };
-    return next;
-  }
-  return lines;
-}
-
-function ApprovalDetail({ name, input }: { name: string; input: unknown }) {
-  const o = (input ?? {}) as Record<string, unknown>;
-  if (name === 'bash') return <Text dimColor>{String(o['command'] ?? '')}</Text>;
-  if (name === 'write_file') {
-    const content = String(o['content'] ?? '');
-    return <Diff before="" after={content} path={`${String(o['path'])} (new content)`} />;
-  }
-  if (name === 'edit_file') {
-    return <Diff before={String(o['oldString'] ?? '')} after={String(o['newString'] ?? '')} path={String(o['path'])} />;
-  }
-  return <Text dimColor>{JSON.stringify(input, null, 2)}</Text>;
-}
-
-function Approval({ pending }: { pending: Pending }) {
-  useInput((input, key) => {
-    const c = input.toLowerCase();
-    if (c === 'y' || key.return) pending.resolve('once');
-    else if (c === 'a') pending.resolve('always');
-    else if (c === 'n' || key.escape) pending.resolve('deny');
-  });
-
-  return (
-    <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1}>
-      <Text color="yellow" bold>
-        {pending.req.repeated
-          ? `${pending.req.toolName} is repeating the same call`
-          : pending.req.subagent
-            ? `a worker subagent wants to run ${pending.req.toolName}`
-            : `${pending.req.toolName} wants to run`}
-      </Text>
-      {pending.req.repeated && (
-        <Text dimColor>
-          allowed by the rules, but this is the third identical call this turn
-        </Text>
-      )}
-      {pending.req.subagent && !pending.req.repeated && (
-        <Text dimColor>delegated work, gated by your rules exactly as a direct call is</Text>
-      )}
-      {!pending.req.repeated && pending.req.matchedPattern && pending.req.matchedPattern !== '*' && (
-        <Text dimColor>{`matched ${pending.req.toolName}: "${pending.req.matchedPattern}"`}</Text>
-      )}
-      <ApprovalDetail name={pending.req.toolName} input={pending.req.input} />
-      <Text>
-        <Text color="green">y</Text> allow once | <Text color="green">a</Text> always allow{' '}
-        {pending.req.suggestedPattern === '*'
-          ? pending.req.toolName
-          : `${pending.req.toolName} ${pending.req.suggestedPattern}`}{' '}
-        | <Text color="red">n</Text> deny
-      </Text>
-    </Box>
-  );
-}
-
-function CommandMenu({ matches, index }: { matches: CommandSpec[]; index: number }) {
-  const width = Math.max(...matches.map((c) => `/${c.name}${c.arg ? ` ${c.arg}` : ''}`.length)) + 1;
-  return (
-    <Box flexDirection="column" marginTop={1}>
-      {matches.map((c, i) => (
-        <Box key={c.name}>
-          <Text color={i === index ? 'cyan' : undefined}>{i === index ? '> ' : '  '}</Text>
-          <Text color={i === index ? 'cyan' : undefined} bold={i === index}>
-            {`/${c.name}${c.arg ? ` ${c.arg}` : ''}`.padEnd(width)}
-          </Text>
-          <Text dimColor>{c.summary}</Text>
-        </Box>
-      ))}
-      <Text dimColor>up/down move | tab complete | enter run | esc dismiss</Text>
-    </Box>
-  );
-}
-
-/** Keyboard wrapper around InstallPrompt, so the prompt itself stays presentational. */
-function InstallConfirm({
-  staged,
-  onDone,
-}: {
-  staged: { row: RegistryRow; url: string; preview: string };
-  onDone: (yes: boolean) => void;
-}) {
-  useInput((input, key) => {
-    const c = input.toLowerCase();
-    if (c === 'y' || key.return) onDone(true);
-    else if (c === 'n' || key.escape) onDone(false);
-  });
-
-  return (
-    <InstallPrompt name={staged.row.name} kind={staged.row.kind} url={staged.url} preview={staged.preview} />
-  );
-}
 
 export function App({
   session,
@@ -477,8 +134,12 @@ export function App({
   const [installing, setInstalling] = useState<
     { row: RegistryRow; url: string; preview: string } | undefined
   >();
+  const [addingMcp, setAddingMcp] = useState(false);
+  const [seconds, setElapsed] = useState(0);
+  const startedAt = useRef<number | undefined>(undefined);
 
-  const modal = pending !== undefined || asking !== undefined || onboarding || installing !== undefined;
+  const modal =
+    pending !== undefined || asking !== undefined || onboarding || installing !== undefined || addingMcp;
   const anyPicker = modelPicker !== undefined || agentPicker || thinkPicker;
   const matches = matchCommands(draft);
   const menuOpen = matches.length > 0 && !menuDismissed && !busy && !modal && !anyPicker && !panel;
@@ -536,7 +197,21 @@ export function App({
   const setWorking = useCallback((value: boolean) => {
     busyRef.current = value;
     setBusy(value);
+    setElapsed(0);
+    startedAt.current = value ? Date.now() : undefined;
   }, []);
+
+  // One tick per second while busy, so a long turn reports how long it has been
+  // going. Derived from a timestamp rather than counted, because Ink's render loop
+  // is not a clock and a dropped tick would drift.
+  useEffect(() => {
+    if (!busy) return;
+    const t = setInterval(() => {
+      const from = startedAt.current;
+      if (from !== undefined) setElapsed(Math.floor((Date.now() - from) / 1000));
+    }, 1000);
+    return () => clearInterval(t);
+  }, [busy]);
 
   const push = useCallback((line: NewLine) => {
     setHistory((h) => [...h, { ...line, key: nextKey() }]);
@@ -810,58 +485,27 @@ export function App({
           return;
         case 'tools':
           push({ kind: 'user', text: chosen.trim() });
-          setPanel({
-            title: 'tools',
-            hint: `${session.activeTools().length} offered this turn of ${Object.keys(session.tools).length} registered`,
-            body: session
-              .activeTools()
-              .sort()
-              .map((t) => {
-                const set = toolSetOf(t);
-                return `- \`${t}\`${set ? `  ${set}` : ''}`;
-              })
-              .join('\n'),
-          });
+          setPanel(toolsPanel(session));
           return;
-        case 'cost': {
+        case 'cost':
           push({ kind: 'user', text: chosen.trim() });
-          const model = hooks.config().model;
-          const spend = costOf(model, session.inputTokens, session.outputTokens);
-          setPanel({
-            title: 'cost',
-            hint: `session ${hooks.sessionId}`,
-            body: [
-              `- model: \`${model}\``,
-              `- billed: ${session.inputTokens} in / ${session.outputTokens} out`,
-              `- spend: ${spend === undefined ? 'unpriced model' : formatUsd(spend)}`,
-              `- context: ~${session.estimatedTokens()} tokens`,
-              `- agent: \`${hooks.agentName()}\` thinking \`${hooks.thinkingLevel()}\``,
-            ].join('\n'),
-          });
+          setPanel(
+            costPanel(session, {
+              sessionId: hooks.sessionId,
+              model: hooks.config().model,
+              agent: hooks.agentName(),
+              thinking: hooks.thinkingLevel(),
+            }),
+          );
           return;
-        }
-        case 'context': {
+        case 'context':
           push({ kind: 'user', text: chosen.trim() });
-          const files = hooks.instructionFiles();
-          setPanel({
-            title: 'project instructions',
-            body: files.length
-              ? files.map((f) => `- \`${f}\``).join('\n')
-              : 'No `AGENTS.md`, `CLAUDE.md`, or `.shiro.md` found. Run `/init` to write one.',
-          });
+          setPanel(contextPanel(hooks.instructionFiles()));
           return;
-        }
-        case 'todos': {
+        case 'todos':
           push({ kind: 'user', text: chosen.trim() });
-          const { todos } = session.notebook.state();
-          setPanel({
-            title: 'task list',
-            body: todos.length
-              ? todos.map((t) => `- ${TODO_MARK[t.status]} ${t.content}${t.note ? ` (${t.note})` : ''}`).join('\n')
-              : 'No task list yet.',
-          });
+          setPanel(todosPanel(session));
           return;
-        }
         case 'notes': {
           push({ kind: 'user', text: chosen.trim() });
           setPanel({ title: 'project memory', body: await hooks.listMemory() });
@@ -945,12 +589,28 @@ export function App({
           }
           return;
         }
+        case 'mcp': {
+          push({ kind: 'user', text: chosen.trim() });
+          if (action.action === 'add') {
+            setAddingMcp(true);
+            return;
+          }
+          if (action.action === 'remove') {
+            try {
+              push({ kind: 'info', text: await hooks.mcp.remove(action.arg!) });
+            } catch (e) {
+              push({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
+            }
+            return;
+          }
+          setPanel({ title: 'mcp servers', hint: '/mcp add to add one', body: hooks.mcp.list() });
+          return;
+        }
         case 'memory': {
           push({ kind: 'user', text: chosen.trim() });
           setWorking(true);
           try {
-            push({ kind: 'info', text: await hooks.summarizeMemory() });
-          } catch (e) {
+            push({ kind: 'info', text: await hooks.summarizeMemory() });          } catch (e) {
             push({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
           }
           setWorking(false);
@@ -1109,6 +769,24 @@ export function App({
 
       {asking && <AskPanel pending={asking} />}
 
+      {addingMcp && (
+        <McpAdd
+          existing={hooks.mcp.names()}
+          onCancel={() => {
+            setAddingMcp(false);
+            push({ kind: 'info', text: 'mcp setup cancelled' });
+          }}
+          onDone={async (result) => {
+            setAddingMcp(false);
+            try {
+              push({ kind: 'info', text: await hooks.mcp.add(result) });
+            } catch (e) {
+              push({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
+            }
+          }}
+        />
+      )}
+
       {pending && <Approval pending={pending} />}
 
       {onboarding && (
@@ -1131,76 +809,54 @@ export function App({
       )}
 
       {modelPicker && (
-        <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
-          <Text color="cyan" bold>
-            Choose a model ({modelPicker.length} available)
-          </Text>
-          <Text dimColor>enter to select, esc to cancel</Text>
-          <SelectInput
-            items={modelPicker.map((m) => ({ key: m, label: m, value: m }))}
-            limit={10}
-            initialIndex={Math.max(0, modelPicker.indexOf(hooks.config().model))}
-            onSelect={(item) => {
-              setModelPicker(undefined);
-              try {
-                push({ kind: 'info', text: hooks.switchModel(item.value) });
-              } catch (e) {
-                push({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
-              }
-            }}
-          />
-        </Box>
+        <Picker
+          title={`Choose a model (${modelPicker.length} available)`}
+          options={modelPicker.map((m) => ({ value: m, label: m }))}
+          current={hooks.config().model}
+          onSelect={(value) => {
+            setModelPicker(undefined);
+            try {
+              push({ kind: 'info', text: hooks.switchModel(value) });
+            } catch (e) {
+              push({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
+            }
+          }}
+        />
       )}
 
       {agentPicker && (
-        <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
-          <Text color="cyan" bold>
-            Choose an agent
-          </Text>
-          <Text dimColor>enter to select, esc to cancel</Text>
-          <SelectInput
-            items={VARIANTS.map((v) => ({
-              key: v.name,
-              label: `${v.name.padEnd(8)} ${v.summary}`,
-              value: v.name,
-            }))}
-            limit={8}
-            initialIndex={Math.max(
-              0,
-              VARIANTS.findIndex((v) => v.name === hooks.agentName()),
-            )}
-            onSelect={(item) => {
-              setAgentPicker(false);
-              try {
-                push({ kind: 'info', text: hooks.switchAgent(item.value) });
-              } catch (e) {
-                push({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
-              }
-            }}
-          />
-        </Box>
+        <Picker
+          title="Choose an agent"
+          options={VARIANTS.map((v) => ({ value: v.name, label: `${v.name.padEnd(8)} ${v.summary}` }))}
+          current={hooks.agentName()}
+          limit={8}
+          onSelect={(value) => {
+            setAgentPicker(false);
+            try {
+              push({ kind: 'info', text: hooks.switchAgent(value) });
+            } catch (e) {
+              push({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
+            }
+          }}
+        />
       )}
 
       {thinkPicker && (
-        <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
-          <Text color="cyan" bold>
-            Thinking level
-          </Text>
-          <Text dimColor>higher costs more and is slower; enter to select, esc to cancel</Text>
-          <SelectInput
-            items={THINKING_LEVELS.map((l) => ({ key: l, label: l, value: l }))}
-            limit={8}
-            initialIndex={Math.max(0, THINKING_LEVELS.indexOf(hooks.thinkingLevel() as (typeof THINKING_LEVELS)[number]))}
-            onSelect={(item) => {
-              setThinkPicker(false);
-              try {
-                push({ kind: 'info', text: hooks.switchThinking(item.value) });
-              } catch (e) {
-                push({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
-              }
-            }}
-          />
-        </Box>
+        <Picker
+          title="Thinking level"
+          hint="higher costs more and is slower"
+          options={THINKING_LEVELS.map((l) => ({ value: l, label: l }))}
+          current={hooks.thinkingLevel()}
+          limit={8}
+          onSelect={(value) => {
+            setThinkPicker(false);
+            try {
+              push({ kind: 'info', text: hooks.switchThinking(value) });
+            } catch (e) {
+              push({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
+            }
+          }}
+        />
       )}
 
       {busy && !modal && (
@@ -1208,9 +864,7 @@ export function App({
           <ThinkingPanel text={thinking} expanded={thinkingOpen} />
           {active && <ActiveTool name={active.name} {...(active.detail ? { detail: active.detail } : {})} />}
           <OutputPanel text={toolOutput} />
-          <Text color="yellow">
-            <Spinner type="dots" /> <Text dimColor>working... esc to interrupt</Text>
-          </Text>
+          <Working seconds={seconds} />
         </Box>
       )}
 

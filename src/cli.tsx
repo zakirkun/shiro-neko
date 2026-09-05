@@ -5,10 +5,12 @@ import type { LanguageModel, ModelMessage } from 'ai';
 import { resolveAgent, VARIANTS, isThinkingLevel, type AgentVariant } from './agents';
 import { configPath, loadConfig, missingKeyMessage, resolveModel, writeConfigFile, type Config } from './config';
 import type { FallbackEvent } from './fallback';
+import { farewell } from './farewell';
 import { readStdin, runHeadless } from './headless';
 import { INIT_PROMPT, loadInstructions } from './instructions';
 import { walk } from './ignore';
 import { connectMcp } from './mcp';
+import { createCommitMessageTool } from './commit';
 import { Memory, KIND_LABEL } from './memory';
 import { costOf } from './pricing';
 import { BUILTIN_PLUGINS, DEFAULT_ENABLED } from './plugins-builtin';
@@ -32,7 +34,6 @@ const HELP = `shiro-neko ${VERSION} - agentic coding CLI
 usage: shiro [options]
        shiro -p "prompt"            headless, prints to stdout
        cat file | shiro -p          prompt read from stdin
-
 options:
   -p, --print [prompt]            headless mode; requires --yolo for tool use
   --json                          with -p, emit one JSON event per line
@@ -67,6 +68,7 @@ env:    SHIRO_PROVIDER SHIRO_MODEL SHIRO_BASE_URL SHIRO_API_KEY
 
 skills:   builtin, plus ~/.shiro-neko/skills/*.md and .shiro/skills/*.md
 registry: /registry to browse and install external skills and plugins
+mcp:      /mcp to add a local or remote server, or list what is configured
 sessions: ${store.sessionsDir()}
 in-session: /help for the command list`;
 
@@ -276,6 +278,10 @@ const session = new Session({
   ...(cfg.maxRetries !== undefined ? { maxRetries: cfg.maxRetries } : {}),
   extraTools: {
     ...(mcp?.tools ?? {}),
+    git_commit_message: createCommitMessageTool({
+      model: languageModel ?? unconfiguredModel,
+      ...(headless ? {} : { cwd: process.cwd() }),
+    }),
     ...(has('--no-subagent')
       ? {}
       : {
@@ -289,7 +295,7 @@ const session = new Session({
           }),
         }),
   },
-  autoApprove: ['task'],
+  autoApprove: ['task', 'git_commit_message'],
   messages: [...record.messages],
   onChange: (messages) => {
     // Debounced so a long tool loop does not hit the disk on every step.
@@ -306,7 +312,6 @@ async function shutdown(code: number): Promise<never> {
   await mcp?.close();
   process.exit(code);
 }
-
 const printArg = flag('-p', '--print');
 if (printArg !== undefined) {
   const prompt = printArg || (await readStdin());
@@ -386,6 +391,51 @@ const hooks: AppHooks = {
         if (await registry.uninstall(kind, bare)) return `removed ${kind} ${bare}\nrestart shiro to unload it`;
       }
       throw new Error(`nothing installed under the name "${bare}"`);
+    },
+  },
+  mcp: {
+    names: () => Object.keys(cfg.mcpServers ?? {}),
+    list: () => {
+      const servers = Object.entries(cfg.mcpServers ?? {});
+      if (servers.length === 0) return 'no MCP servers configured\n\n`/mcp add` sets one up.';
+
+      const live = new Map<string, number>();
+      for (const name of Object.keys(mcp?.tools ?? {})) {
+        const server = /^mcp__([^_]+(?:_[^_]+)*)__/.exec(name)?.[1];
+        if (server) live.set(server, (live.get(server) ?? 0) + 1);
+      }
+      const failed = new Map((mcp?.errors ?? []).map((e) => [e.server, e.message]));
+
+      const rows = servers.map(([name, config]) => {
+        const where = 'url' in config ? config.url : [config.command, ...(config.args ?? [])].join(' ');
+        const state = failed.has(name)
+          ? `failed: ${failed.get(name)}`
+          : live.has(name)
+            ? `${live.get(name)} tools`
+            : has('--no-mcp')
+              ? 'not connected (--no-mcp)'
+              : 'not connected this session';
+        return `- \`${name}\` (${'url' in config ? 'remote' : 'local'}) - ${state}\n  ${where}`;
+      });
+
+      return [...rows, '', `configured in ${configPath()}`].join('\n');
+    },
+    add: async (result) => {
+      const servers = { ...(cfg.mcpServers ?? {}), [result.name]: result.config };
+      cfg = { ...cfg, mcpServers: servers };
+      const path = await writeConfigFile({ mcpServers: servers });
+      const where = 'url' in result.config ? result.config.url : result.config.command;
+      // Connected at boot, like the servers already in the file: a mid-turn connect
+      // would change the tool list under a turn that is already running.
+      return `added mcp server ${result.name} (${where})\nsaved to ${path}\nrestart shiro to connect it`;
+    },
+    remove: async (name) => {
+      const servers = { ...(cfg.mcpServers ?? {}) };
+      if (!(name in servers)) throw new Error(`no MCP server named "${name}"`);
+      delete servers[name];
+      cfg = { ...cfg, mcpServers: servers };
+      const path = await writeConfigFile({ mcpServers: servers });
+      return `removed mcp server ${name}\nsaved to ${path}\nrestart shiro to disconnect it`;
     },
   },
   initPrompt: INIT_PROMPT,
@@ -513,12 +563,15 @@ const header = [
   ...plugins.errors.map((e) => `plugin ${e.plugin}: ${e.message}`),
   memory && memory.all().length > 0 ? `memory: ${memory.all().length} notes about this project` : undefined,
   mcp && Object.keys(mcp.tools).length > 0 ? `mcp: ${Object.keys(mcp.tools).length} tools` : undefined,
+  !mcp && cfg.mcpServers && Object.keys(cfg.mcpServers).length > 0
+    ? `mcp: ${Object.keys(cfg.mcpServers).length} configured, not connected (--no-mcp)`
+    : undefined,
   ...(mcp?.errors ?? []).map((e) => `mcp ${e.server} failed: ${e.message}`),
   yolo
     ? 'approvals: OFF (--yolo), but deny rules and the guard still apply'
     : cfg.permission
       ? `approvals: rules for ${Object.keys(cfg.permission).join(', ')}, defaults elsewhere`
-      : 'approvals: ask for write_file, edit_file, multi_edit, bash, mcp__*',
+      : 'approvals: ask for write_file, edit_file, multi_edit, apply_patch, move_file, delete_file, bash, web_fetch, mcp__*',
   cfg.toolSets ? `tool sets: core, ${cfg.toolSets.join(', ')}` : undefined,
   '/help for commands',
 ]
@@ -541,4 +594,14 @@ const app = render(
   { exitOnCtrlC: false },
 );
 await app.waitUntilExit();
+// Printed after Ink has released the screen, so it survives the final repaint. The
+// title comes from the messages rather than `record`, whose own title is only
+// refreshed by the debounced save and may not have run yet.
+console.log(
+  farewell({
+    id: record.id,
+    messages: session.messages.length,
+    title: store.titleOf(session.messages),
+  }),
+);
 await shutdown(0);
