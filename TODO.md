@@ -171,6 +171,10 @@ Kept for one release, then deleted.
       reasoning item it removed, which on a reasoning model is every tool call. The model lost
       its record of what it had run and re-ran it until the step limit. The repair strips the
       provider `itemId` instead of the part, so the same content is sent inline
+- [x] **A dead provider item no longer ends the turn.** An `item_reference` resolves only while
+      the provider still stores that item, so a resumed session could fail on every attempt with
+      404 "Item with id 'msg_...' not found". Compaction now sends the history inline, and a 404
+      naming a missing item rewrites the history inline and retries once
 - [x] `/registry`: browse, search, install, and remove external skills and plugins. Skills are
       shown in full before install; plugins are a validated manifest of deny rules, never code
 - [x] Context shown as a percentage of the compaction threshold, amber at two thirds, red at 90

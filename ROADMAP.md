@@ -153,6 +153,44 @@ stay structurally read-only, and no subagent holds `web_fetch`.
 
 ---
 
+### 0.1.0-beta.5
+
+**A dead provider item no longer ends the turn.** An `item_reference` resolves only while the
+provider still stores that item, so a resumed session — or one that fell back to `/v1/responses`
+mid-turn — could fail with 404 "Item with id 'msg_...' not found" on every attempt, since every
+retry sent the same reference. Compaction now strips every provider `itemId` from what it sends,
+and a 404 naming a missing item rewrites the session's history inline and runs the request again,
+once per turn and only before any output has been delivered.
+
+**Interface.** Context shows the elapsed working time and a compaction warning as the threshold
+approaches, diff lines are numbered, markdown task lists render, the prompt edits by word and
+`ctrl-d` deletes to the end of line, and a farewell tells you how to resume the session.
+
+**More tools.** `git_commit_message` writes a commit message from the staged diff and the
+repository's own recent subjects, in one nested model call — it never commits, so it needs no
+approval. `move_file` and `delete_file` fill the gap that made every rename a write-then-delete
+pair: both are gated, `move_file` matches permission rules at both ends, and `delete_file`
+refuses a directory because removing a tree is what the guard blocks in `bash`. `git_branch`
+lists branches with the current one marked.
+
+**More plugins.** `protect` refuses writes to `.git`, lockfiles, `node_modules`, vendored code,
+and build output — files a tool owns rather than a person, where an edit leaves a repository
+that looks fine and behaves wrongly. It ships on, alongside `guard` and `secrets`, and every
+path-based guard now shares one helper that understands where each write tool keeps its paths.
+
+**More skills.** `security` (trust boundaries, then injection, authorisation, traversal, SSRF),
+`perf` (measure, locate, one change, stop at a target), and `migrate` (changelog first, every
+call site before one edit, never hand-merge a lockfile) join the bundled set.
+
+**The MCP panel.** `/mcp add` walks through a local or remote server — kind, name, command and
+arguments or URL and headers — validating the name against the `mcp__<server>__<tool>`
+namespace as it is typed rather than failing at connect. `/mcp` lists what is configured with
+each server's live tool count or its connection error, and `/mcp remove` takes one out. All
+three write `config.json` directly; a new server connects on the next start, because
+connecting mid-turn would change the tool list under a running request.
+
+---
+
 ## Next
 
 ### MCP without the schema tax
